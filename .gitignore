@@ -1,4 +1,5 @@
 
-/__pycache__
+/__pycache__/
+.venv/
 .initialized
-/tests/__pycache__
+tests/__pycache__/

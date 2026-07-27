@@ -26,38 +26,53 @@ class DummyVar:
         self.value = value
 
 
+def _make_plan_app(**overrides):
+    """Build a minimal DummyApp with all build_plan checkbox vars."""
+    defaults = {
+        "var_user_cache": False,
+        "var_thumbnails": False,
+        "var_trash": False,
+        "var_firefox": False,
+        "var_chrome": False,
+        "var_flatpak_app_cache": False,
+        "var_config_app_caches": False,
+        "var_dev_tool_caches": False,
+        "var_user_lang_tool_caches": False,
+        "var_python_artifacts": False,
+        "var_local_history": False,
+        "var_flatpak_user": False,
+        "var_flatpak_repair_user": False,
+        "var_tmp": False,
+        "var_flatpak_syscache": False,
+        "var_apt_cache": False,
+        "var_system_misc_caches": False,
+        "var_system_extra_caches": False,
+        "var_flatpak_repair_system": False,
+        "var_apt": False,
+        "var_journal": False,
+        "var_old_kernels": False,
+        "journal_retention": "3d",
+    }
+    defaults.update(overrides)
+    app = type("DummyApp", (), {})()
+    for key, value in defaults.items():
+        setattr(app, key, DummyVar(value))
+    app.patterns = {
+        "config_app_caches": MINT_CLEANER.CONFIG_CACHE_PATTERNS,
+        "dev_tool_caches": MINT_CLEANER.DEV_TOOL_CACHE_PATTERNS,
+        "user_lang_tool_caches": MINT_CLEANER.USER_LANG_TOOL_CACHE_PATTERNS,
+        "python_artifacts": [],
+        "local_history": [],
+        "system_misc_caches": MINT_CLEANER.SYSTEM_MISC_CACHE_PATTERNS,
+        "system_extra_caches": MINT_CLEANER.SYSTEM_EXTRA_CACHE_PATTERNS,
+    }
+    app.log = None
+    return app
+
+
 class BuildPlanConfigCacheTests(unittest.TestCase):
     def test_build_plan_includes_config_cache_patterns(self):
-        app = type("DummyApp", (), {})()
-        app.var_user_cache = DummyVar(False)
-        app.var_thumbnails = DummyVar(False)
-        app.var_trash = DummyVar(False)
-        app.var_firefox = DummyVar(False)
-        app.var_chrome = DummyVar(False)
-        app.var_flatpak_app_cache = DummyVar(False)
-        app.var_config_app_caches = DummyVar(True)
-        app.var_dev_tool_caches = DummyVar(False)
-        app.var_user_lang_tool_caches = DummyVar(False)
-        app.var_flatpak_user = DummyVar(False)
-        app.var_flatpak_repair_user = DummyVar(False)
-        app.var_tmp = DummyVar(False)
-        app.var_flatpak_syscache = DummyVar(False)
-        app.var_apt_cache = DummyVar(False)
-        app.var_system_misc_caches = DummyVar(False)
-        app.var_system_extra_caches = DummyVar(False)
-        app.var_flatpak_repair_system = DummyVar(False)
-        app.var_apt = DummyVar(False)
-        app.var_journal = DummyVar(False)
-        app.var_old_kernels = DummyVar(False)
-        app.journal_retention = DummyVar("3d")
-        app.patterns = {
-            "config_app_caches": MINT_CLEANER.CONFIG_CACHE_PATTERNS,
-            "dev_tool_caches": MINT_CLEANER.DEV_TOOL_CACHE_PATTERNS,
-            "user_lang_tool_caches": MINT_CLEANER.USER_LANG_TOOL_CACHE_PATTERNS,
-            "system_misc_caches": MINT_CLEANER.SYSTEM_MISC_CACHE_PATTERNS,
-            "system_extra_caches": MINT_CLEANER.SYSTEM_EXTRA_CACHE_PATTERNS,
-        }
-        app.log = None
+        app = _make_plan_app(var_config_app_caches=True)
 
         plan = MINT_CLEANER.MintCleanerApp.build_plan(app)
 
@@ -68,36 +83,7 @@ class BuildPlanConfigCacheTests(unittest.TestCase):
             self.assertIn(pattern, plan["user_py_delete"])
 
     def test_build_plan_includes_general_linux_cache_patterns(self):
-        app = type("DummyApp", (), {})()
-        app.var_user_cache = DummyVar(False)
-        app.var_thumbnails = DummyVar(False)
-        app.var_trash = DummyVar(False)
-        app.var_firefox = DummyVar(False)
-        app.var_chrome = DummyVar(False)
-        app.var_flatpak_app_cache = DummyVar(False)
-        app.var_config_app_caches = DummyVar(False)
-        app.var_dev_tool_caches = DummyVar(True)
-        app.var_user_lang_tool_caches = DummyVar(False)
-        app.var_flatpak_user = DummyVar(False)
-        app.var_flatpak_repair_user = DummyVar(False)
-        app.var_tmp = DummyVar(False)
-        app.var_flatpak_syscache = DummyVar(False)
-        app.var_apt_cache = DummyVar(False)
-        app.var_system_misc_caches = DummyVar(True)
-        app.var_system_extra_caches = DummyVar(False)
-        app.var_flatpak_repair_system = DummyVar(False)
-        app.var_apt = DummyVar(False)
-        app.var_journal = DummyVar(False)
-        app.var_old_kernels = DummyVar(False)
-        app.journal_retention = DummyVar("3d")
-        app.patterns = {
-            "config_app_caches": MINT_CLEANER.CONFIG_CACHE_PATTERNS,
-            "dev_tool_caches": MINT_CLEANER.DEV_TOOL_CACHE_PATTERNS,
-            "user_lang_tool_caches": MINT_CLEANER.USER_LANG_TOOL_CACHE_PATTERNS,
-            "system_misc_caches": MINT_CLEANER.SYSTEM_MISC_CACHE_PATTERNS,
-            "system_extra_caches": MINT_CLEANER.SYSTEM_EXTRA_CACHE_PATTERNS,
-        }
-        app.log = None
+        app = _make_plan_app(var_dev_tool_caches=True, var_system_misc_caches=True)
 
         plan = MINT_CLEANER.MintCleanerApp.build_plan(app)
 
@@ -107,36 +93,7 @@ class BuildPlanConfigCacheTests(unittest.TestCase):
             self.assertIn(pattern, plan["root_rm_patterns"])
 
     def test_build_plan_includes_new_user_and_system_extra_caches(self):
-        app = type("DummyApp", (), {})()
-        app.var_user_cache = DummyVar(False)
-        app.var_thumbnails = DummyVar(False)
-        app.var_trash = DummyVar(False)
-        app.var_firefox = DummyVar(False)
-        app.var_chrome = DummyVar(False)
-        app.var_flatpak_app_cache = DummyVar(False)
-        app.var_config_app_caches = DummyVar(False)
-        app.var_dev_tool_caches = DummyVar(False)
-        app.var_user_lang_tool_caches = DummyVar(True)
-        app.var_flatpak_user = DummyVar(False)
-        app.var_flatpak_repair_user = DummyVar(False)
-        app.var_tmp = DummyVar(False)
-        app.var_flatpak_syscache = DummyVar(False)
-        app.var_apt_cache = DummyVar(False)
-        app.var_system_misc_caches = DummyVar(False)
-        app.var_system_extra_caches = DummyVar(True)
-        app.var_flatpak_repair_system = DummyVar(False)
-        app.var_apt = DummyVar(False)
-        app.var_journal = DummyVar(False)
-        app.var_old_kernels = DummyVar(False)
-        app.journal_retention = DummyVar("3d")
-        app.patterns = {
-            "config_app_caches": MINT_CLEANER.CONFIG_CACHE_PATTERNS,
-            "dev_tool_caches": MINT_CLEANER.DEV_TOOL_CACHE_PATTERNS,
-            "user_lang_tool_caches": MINT_CLEANER.USER_LANG_TOOL_CACHE_PATTERNS,
-            "system_misc_caches": MINT_CLEANER.SYSTEM_MISC_CACHE_PATTERNS,
-            "system_extra_caches": MINT_CLEANER.SYSTEM_EXTRA_CACHE_PATTERNS,
-        }
-        app.log = None
+        app = _make_plan_app(var_user_lang_tool_caches=True, var_system_extra_caches=True)
 
         plan = MINT_CLEANER.MintCleanerApp.build_plan(app)
 
@@ -144,6 +101,90 @@ class BuildPlanConfigCacheTests(unittest.TestCase):
             self.assertIn(pattern, plan["user_py_delete"])
         for pattern in MINT_CLEANER.SYSTEM_EXTRA_CACHE_PATTERNS:
             self.assertIn(pattern, plan["root_rm_patterns"])
+
+    def test_build_plan_includes_python_artifacts(self):
+        with tempfile.TemporaryDirectory() as tmp_home:
+            project = os.path.join(tmp_home, "Dokumente", "GitHub", "demo")
+            pycache = os.path.join(project, "__pycache__")
+            venv = os.path.join(project, ".venv")
+            os.makedirs(pycache)
+            os.makedirs(venv)
+            with open(os.path.join(pycache, "mod.pyc"), "wb") as handle:
+                handle.write(b"\0")
+
+            app = _make_plan_app(var_python_artifacts=True)
+            with mock.patch.object(
+                MINT_CLEANER,
+                "find_python_artifact_dirs",
+                return_value=[pycache, venv],
+            ):
+                plan = MINT_CLEANER.MintCleanerApp.build_plan(app)
+
+            self.assertIn(pycache, plan["user_py_delete"])
+            self.assertIn(venv, plan["user_py_delete"])
+            self.assertEqual(app.patterns["python_artifacts"], [pycache, venv])
+
+    def test_build_plan_includes_local_history(self):
+        history_dir = "/tmp/fake-project/.history"
+        app = _make_plan_app(var_local_history=True)
+        with mock.patch.object(
+            MINT_CLEANER,
+            "find_local_history_dirs",
+            return_value=[history_dir],
+        ):
+            plan = MINT_CLEANER.MintCleanerApp.build_plan(app)
+
+        self.assertIn(history_dir, plan["user_py_delete"])
+        self.assertEqual(app.patterns["local_history"], [history_dir])
+
+
+class FindPythonArtifactDirsTests(unittest.TestCase):
+    def test_finds_pycache_and_venv_under_projects(self):
+        with tempfile.TemporaryDirectory() as tmp_home:
+            project = os.path.join(tmp_home, "Dokumente", "GitHub", "demo")
+            pycache = os.path.join(project, "__pycache__")
+            venv = os.path.join(project, ".venv", "lib")
+            os.makedirs(pycache)
+            os.makedirs(venv)
+            nested_skip = os.path.join(tmp_home, ".cache", "proj", "__pycache__")
+            os.makedirs(nested_skip)
+
+            found = MINT_CLEANER.find_python_artifact_dirs(root=tmp_home)
+
+            self.assertIn(pycache, found)
+            self.assertIn(os.path.join(project, ".venv"), found)
+            self.assertNotIn(nested_skip, found)
+
+    def test_skips_active_sys_prefix_venv(self):
+        with tempfile.TemporaryDirectory() as tmp_home:
+            project = os.path.join(tmp_home, "proj")
+            active_venv = os.path.join(project, ".venv")
+            other_venv = os.path.join(tmp_home, "other", ".venv")
+            os.makedirs(active_venv)
+            os.makedirs(other_venv)
+
+            with mock.patch.object(MINT_CLEANER.sys, "prefix", active_venv):
+                found = MINT_CLEANER.find_python_artifact_dirs(root=tmp_home)
+
+            self.assertNotIn(active_venv, found)
+            self.assertIn(other_venv, found)
+
+
+class FindLocalHistoryDirsTests(unittest.TestCase):
+    def test_finds_history_dirs_and_skips_cache_trees(self):
+        with tempfile.TemporaryDirectory() as tmp_home:
+            project = os.path.join(tmp_home, "Dokumente", "GitHub", "demo")
+            history = os.path.join(project, ".history")
+            os.makedirs(history)
+            with open(os.path.join(history, "file_20260101010101.py"), "w", encoding="utf-8") as handle:
+                handle.write("old")
+            nested_skip = os.path.join(tmp_home, ".cache", "proj", ".history")
+            os.makedirs(nested_skip)
+
+            found = MINT_CLEANER.find_local_history_dirs(root=tmp_home)
+
+            self.assertIn(history, found)
+            self.assertNotIn(nested_skip, found)
 
 
 class TrashPathsTests(unittest.TestCase):
@@ -210,6 +251,85 @@ class TrashPathsTests(unittest.TestCase):
                 stdout=mock.ANY,
                 stderr=mock.ANY,
             )
+
+
+class ProtectedPathTests(unittest.TestCase):
+    def test_is_protected_path_for_dconf_and_icons(self):
+        self.assertTrue(MINT_CLEANER.is_protected_path("/home/joruf/.cache/dconf"))
+        self.assertTrue(MINT_CLEANER.is_protected_path("/home/joruf/.cache/dconf/user"))
+        self.assertTrue(MINT_CLEANER.is_protected_path("/home/joruf/.icons/Windows-10-master"))
+        self.assertTrue(MINT_CLEANER.is_protected_path("/home/joruf/.local/share/icons/hicolor"))
+        self.assertTrue(MINT_CLEANER.is_protected_path("/tmp/.X11-unix"))
+        self.assertTrue(MINT_CLEANER.is_protected_path("/tmp/pulse-PKdhtXMmr18n"))
+        self.assertFalse(MINT_CLEANER.is_protected_path("/home/joruf/.cache/mozilla"))
+        self.assertFalse(MINT_CLEANER.is_protected_path("/tmp/something-safe"))
+
+    def test_rm_paths_skips_protected_dconf(self):
+        with tempfile.TemporaryDirectory() as tmp_home:
+            dconf_dir = os.path.join(tmp_home, ".cache", "dconf")
+            other_dir = os.path.join(tmp_home, ".cache", "mozilla")
+            os.makedirs(dconf_dir, exist_ok=True)
+            os.makedirs(other_dir, exist_ok=True)
+            with open(os.path.join(dconf_dir, "user"), "w", encoding="utf-8") as handle:
+                handle.write("x")
+            with open(os.path.join(other_dir, "cache.db"), "w", encoding="utf-8") as handle:
+                handle.write("y")
+
+            with mock.patch.dict(os.environ, {"HOME": tmp_home}, clear=False):
+                removed, logs = MINT_CLEANER.rm_paths([os.path.join(tmp_home, ".cache", "*")])
+
+            self.assertEqual(removed, 1)
+            self.assertTrue(os.path.isdir(dconf_dir))
+            self.assertFalse(os.path.exists(other_dir))
+            self.assertIn("Skipped protected path:", logs)
+
+    def test_sanitize_helper_environment_clears_session_vars(self):
+        original = dict(os.environ)
+        try:
+            os.environ["XDG_RUNTIME_DIR"] = "/run/user/1000"
+            os.environ["DBUS_SESSION_BUS_ADDRESS"] = "unix:path=/run/user/1000/bus"
+            os.environ["DISPLAY"] = ":0"
+            os.environ["HOME"] = "/home/joruf"
+
+            MINT_CLEANER.sanitize_helper_environment()
+
+            self.assertNotIn("XDG_RUNTIME_DIR", os.environ)
+            self.assertNotIn("DBUS_SESSION_BUS_ADDRESS", os.environ)
+            self.assertNotIn("DISPLAY", os.environ)
+            self.assertEqual(os.environ.get("HOME"), "/root")
+            self.assertEqual(os.environ.get("XDG_CACHE_HOME"), "/root/.cache")
+        finally:
+            os.environ.clear()
+            os.environ.update(original)
+
+    def test_repair_user_hicolor_shadow_removes_incomplete_index(self):
+        with tempfile.TemporaryDirectory() as tmp_home:
+            hicolor = os.path.join(tmp_home, ".local/share/icons/hicolor")
+            apps = os.path.join(hicolor, "32x32/apps")
+            os.makedirs(apps, exist_ok=True)
+            index_path = os.path.join(hicolor, "index.theme")
+            with open(index_path, "w", encoding="utf-8") as handle:
+                handle.write(
+                    "[Icon Theme]\nName=Hicolor\nDirectories=32x32/apps\n"
+                    "[32x32/apps]\nSize=32\nType=Fixed\n"
+                )
+            cache_path = os.path.join(hicolor, "icon-theme.cache")
+            with open(cache_path, "wb") as handle:
+                handle.write(b"x")
+            app_icon = os.path.join(apps, "agentforge.png")
+            with open(app_icon, "wb") as handle:
+                handle.write(b"png")
+
+            with mock.patch.dict(os.environ, {"HOME": tmp_home}, clear=False):
+                self.assertTrue(MINT_CLEANER.user_hicolor_shadows_system_icons())
+                changed, message = MINT_CLEANER.repair_user_hicolor_shadow()
+
+            self.assertTrue(changed)
+            self.assertIn("Repaired incomplete", message)
+            self.assertFalse(os.path.exists(index_path))
+            self.assertFalse(os.path.exists(cache_path))
+            self.assertTrue(os.path.exists(index_path + ".mint-cleaner-backup"))
+            self.assertTrue(os.path.exists(app_icon))
 
 
 if __name__ == "__main__":

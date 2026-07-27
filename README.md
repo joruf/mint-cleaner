@@ -47,7 +47,10 @@ System tasks (require root privileges)
 (configurable retention, e.g., 3d / 100M)
 
 User tasks (run as your user)
-- ~/.cache/* – application caches (web browser caches, thumbnails, etc.)
+- ~/.cache/* – application caches (browser caches, etc.)
+  **Protected (never deleted):** `dconf` and other session dirs, plus `~/.icons`,
+  `~/.themes`, and `~/.local/share/icons` — this prevents Cinnamon/Nemo icons
+  from disappearing after a cleanup.
 - ~/.thumbnails/* – thumbnail cache of the file manager
 - ~/.local/share/Trash/* – your Trash folder (files you already deleted once)
 - Flatpak application cache – ~/.var/app/*/cache/* (caches of Flatpak apps)
@@ -65,6 +68,14 @@ User tasks (run as your user)
   - ~/.cache/pip/*, ~/.cache/pypoetry/*, ~/.cache/uv/*
   - ~/.cache/go-build/*, ~/.cache/node-gyp/*
   - ~/.cache/fontconfig/*, ~/.cache/mesa_shader_cache/*
+- Python leftovers under home (safe to recreate):
+  - `__pycache__` directories (bytecode cache)
+  - `.venv` virtual environments
+  (scans ~ with skip rules for caches/app data; does not remove an active interpreter venv)
+- Editor Local History under home:
+  - `.history` folders (VS Code / Cursor Local History extension)
+  - Warning: deleting these removes timeline/history snapshots permanently
+    (not recoverable from Git; extension only creates new snapshots going forward)
 - Flatpak user: uninstall unused – flatpak uninstall --unused -y
 (removes unused Flatpak runtimes and extensions)
 - Flatpak repair user – flatpak repair --user -y

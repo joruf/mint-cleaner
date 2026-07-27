@@ -26,6 +26,46 @@ import getpass
 import subprocess
 from typing import Tuple, List, Dict, Any, Optional
 
+# Session variables that must never be inherited by the root helper.
+# If kept, importing tkinter/GLib as root writes into the user's dconf and
+# leaves root-owned files that break Cinnamon/Nemo icons and themes.
+HELPER_SESSION_ENV_VARS: tuple[str, ...] = (
+    "XDG_RUNTIME_DIR",
+    "DBUS_SESSION_BUS_ADDRESS",
+    "AT_SPI_BUS_ADDRESS",
+    "GNOME_KEYRING_CONTROL",
+    "GNOME_KEYRING_PID",
+    "GPG_AGENT_INFO",
+    "SSH_AUTH_SOCK",
+    "SESSION_MANAGER",
+    "XAUTHORITY",
+    "DISPLAY",
+    "WAYLAND_DISPLAY",
+)
+
+
+def sanitize_helper_environment() -> None:
+    """
+    Detach the privileged helper from the calling user's desktop session.
+
+    pkexec may still leave user session variables in the environment. Combined
+    with importing tkinter as root this recreates /run/user/<uid>/dconf/user
+    and ~/.cache/dconf as root-owned files and removes desktop icons.
+    """
+    for key in HELPER_SESSION_ENV_VARS:
+        os.environ.pop(key, None)
+    # Force root-local config/cache paths so nothing writes into the user home.
+    os.environ["HOME"] = "/root"
+    os.environ["XDG_CACHE_HOME"] = "/root/.cache"
+    os.environ["XDG_CONFIG_HOME"] = "/root/.config"
+    os.environ["XDG_DATA_HOME"] = "/root/.local/share"
+    os.environ["XDG_STATE_HOME"] = "/root/.local/state"
+
+
+# Must run before tkinter/GLib imports when started as the pkexec helper.
+if "--helper" in sys.argv:
+    sanitize_helper_environment()
+
 if __name__ == "__main__" and "--helper" not in sys.argv:
     from dependencies import ensure_runtime_dependencies
 
@@ -43,6 +83,41 @@ from urllib.parse import quote
 # ----------------------------- Config -----------------------------
 
 AUTOCHECK_THRESHOLD_MB = 100  # Auto select items larger than this many MB; set 0 to disable
+
+# ~/.cache entries that must never be deleted (desktop session / icons / themes).
+PROTECTED_USER_CACHE_NAMES: frozenset = frozenset({
+    "dconf",
+    "ibus",
+    "ibus-table",
+    "imsettings",
+    "keyring",
+    "cinnamon",
+    "muffin",
+    "sessions",
+    "session",
+    "at-spi",
+    "at-spi2",
+    "gnome-shell",
+    "evolution",
+})
+
+# Absolute path prefixes under $HOME that must never be deleted or trashed.
+PROTECTED_HOME_RELATIVE_PREFIXES: tuple[str, ...] = (
+    ".cache/dconf",
+    ".config/dconf",
+    ".icons",
+    ".themes",
+    ".local/share/icons",
+    ".local/share/themes",
+)
+
+# /tmp and /var/tmp names that keep the graphical session alive.
+PROTECTED_TMP_NAMES: frozenset = frozenset({
+    ".X11-unix",
+    ".ICE-unix",
+    ".font-unix",
+    ".Test-unix",
+})
 
 # Conservative cache-only directories in ~/.config.
 # These paths contain temporary browser/Electron caches and can be recreated.
@@ -108,7 +183,152 @@ SYSTEM_EXTRA_CACHE_PATTERNS: List[str] = [
     "/var/lib/systemd/coredump/*",
 ]
 
+# Regeneratable Python project leftovers under the home directory.
+PYTHON_ARTIFACT_DIR_NAMES: frozenset = frozenset({"__pycache__", ".venv"})
+
+# VS Code / Cursor Local History extension snapshots (xyz.local-history).
+LOCAL_HISTORY_DIR_NAMES: frozenset = frozenset({".history"})
+
+# Do not descend into these while scanning home for named leftover dirs.
+HOME_SCAN_SKIP_DIR_NAMES: frozenset = frozenset({
+    ".git",
+    "node_modules",
+    ".cache",
+    ".npm",
+    ".yarn",
+    ".pnpm-store",
+    ".cargo",
+    ".rustup",
+    ".local",
+    ".config",
+    ".mozilla",
+    ".thunderbird",
+    ".var",
+    ".snap",
+    "snap",
+    ".thumbnails",
+    ".steam",
+    ".wine",
+    "Trash",
+    ".Trash",
+    ".gvfs",
+    ".dbus",
+    ".pki",
+    ".cursor",
+    ".vscode",
+    "__pycache__",
+    ".venv",
+    ".history",
+})
+
+# Cap home walk depth (from $HOME) for responsive size analysis.
+HOME_SCAN_MAX_DEPTH = 12
+PYTHON_ARTIFACT_MAX_DEPTH = HOME_SCAN_MAX_DEPTH
+# Backwards-compatible alias used by older call sites / tests.
+PYTHON_ARTIFACT_SKIP_DIR_NAMES = HOME_SCAN_SKIP_DIR_NAMES
+
 # ----------------------------- Utilities (unprivileged) -----------------------------
+
+def is_protected_path(path: str) -> bool:
+    """
+    Return True when a path must never be deleted or moved to Trash.
+
+    Protects desktop session state (dconf), icon/theme directories, and X11
+    socket directories under /tmp so Cinnamon/Nemo icons cannot disappear.
+    Checks are independent of $HOME so the root helper stays safe too.
+
+    :param path: File or directory path (may contain ~).
+    :return: True when the path is protected.
+    """
+    expanded = os.path.abspath(os.path.expanduser(path))
+
+    for relative in PROTECTED_HOME_RELATIVE_PREFIXES:
+        marker = "/" + relative.replace("\\", "/")
+        idx = expanded.find(marker)
+        if idx != -1:
+            after = expanded[idx + len(marker):]
+            if after == "" or after.startswith(os.sep):
+                return True
+
+    parts = expanded.split(os.sep)
+    try:
+        cache_idx = parts.index(".cache")
+    except ValueError:
+        cache_idx = -1
+    if cache_idx >= 0 and cache_idx + 1 < len(parts):
+        if parts[cache_idx + 1] in PROTECTED_USER_CACHE_NAMES:
+            return True
+
+    for tmp_root in ("/tmp", "/var/tmp"):
+        if expanded.startswith(tmp_root + os.sep):
+            name = expanded[len(tmp_root) + 1:].split(os.sep, 1)[0]
+            if name in PROTECTED_TMP_NAMES or name.startswith("pulse-"):
+                return True
+        elif expanded == tmp_root:
+            # Never remove the tmp roots themselves.
+            return True
+
+    return False
+
+
+def user_hicolor_shadows_system_icons() -> bool:
+    """
+    Return True when ~/.local/share/icons/hicolor replaces system hicolor unsafely.
+
+    An incomplete user hicolor index.theme (common for custom app launchers)
+    shadows /usr/share/icons/hicolor and hides Nemo/Cinnamon xsi-*-symbolic
+    toolbar and sidebar icons.
+
+    :return: True when repair is needed.
+    """
+    index_path = os.path.expanduser("~/.local/share/icons/hicolor/index.theme")
+    if not os.path.isfile(index_path):
+        return False
+    try:
+        with open(index_path, encoding="utf-8", errors="replace") as handle:
+            text = handle.read()
+    except OSError:
+        return False
+    # Safe user overlays list scalable/actions (or inherit full hicolor coverage).
+    if "scalable/actions" in text or "xsi-" in text:
+        return False
+    return "Directories=" in text
+
+
+def repair_user_hicolor_shadow() -> Tuple[bool, str]:
+    """
+    Remove incomplete user hicolor theme metadata that hides system icons.
+
+    Keeps custom app icons under ~/.local/share/icons/hicolor/*/apps/ intact.
+    Only removes index.theme and icon-theme.cache when they shadow xsi icons.
+
+    :return: (changed, log_message)
+    """
+    if not user_hicolor_shadows_system_icons():
+        return False, "User hicolor theme does not shadow system icons."
+
+    base = os.path.expanduser("~/.local/share/icons/hicolor")
+    removed: List[str] = []
+    for name in ("index.theme", "icon-theme.cache"):
+        path = os.path.join(base, name)
+        if not os.path.exists(path):
+            continue
+        backup = path + ".mint-cleaner-backup"
+        try:
+            if os.path.exists(backup):
+                os.remove(backup)
+            os.rename(path, backup)
+            removed.append(os.path.basename(path))
+        except OSError as exc:
+            return False, f"Could not repair user hicolor theme: {exc}"
+
+    if not removed:
+        return False, "User hicolor theme does not shadow system icons."
+    return True, (
+        "Repaired incomplete ~/.local/share/icons/hicolor theme "
+        f"(moved {', '.join(removed)} aside). Nemo/Cinnamon system icons restored."
+    )
+
 
 def human_mb(n_bytes: int) -> str:
     """
@@ -129,18 +349,27 @@ def human_gb(n_bytes: int) -> str:
 def size_of_path(path: str) -> int:
     """
     Compute size in bytes of a file, directory or glob pattern.
-    Ignores permission errors and broken symlinks.
+    Ignores permission errors, broken symlinks and protected session paths.
 
     :param path: File, directory or glob pattern.
     :return: Total size in bytes.
     """
     path = os.path.expanduser(path)
     if os.path.exists(path) and not glob.has_magic(path):
+        if is_protected_path(path):
+            return 0
         if os.path.isdir(path) and not os.path.islink(path):
             total = 0
-            for root, _, files in os.walk(path, onerror=lambda e: None):
+            for root, dirnames, files in os.walk(path, onerror=lambda e: None):
+                # Skip protected children when measuring caches.
+                dirnames[:] = [
+                    d for d in dirnames
+                    if not is_protected_path(os.path.join(root, d))
+                ]
                 for f in files:
                     fp = os.path.join(root, f)
+                    if is_protected_path(fp):
+                        continue
                     try:
                         if not os.path.islink(fp):
                             total += os.path.getsize(fp)
@@ -154,6 +383,8 @@ def size_of_path(path: str) -> int:
                 return 0
     total = 0
     for p in glob.glob(path, recursive=False):
+        if is_protected_path(p):
+            continue
         total += size_of_path(p)
     return total
 
@@ -172,6 +403,106 @@ def size_of_patterns(patterns: List[str]) -> int:
         except Exception:
             pass
     return total
+
+
+def find_named_dirs_under_home(
+    target_names: frozenset,
+    root: Optional[str] = None,
+    max_depth: int = HOME_SCAN_MAX_DEPTH,
+    skip_active_prefix: bool = False,
+) -> List[str]:
+    """
+    Find directories with exact target names under root.
+
+    Walks with skip rules so caches, app data and VCS dirs are not scanned.
+    Does not follow directory symlinks.
+
+    :param target_names: Directory basenames to collect.
+    :param root: Directory to scan (default: ~).
+    :param max_depth: Maximum directory depth relative to root.
+    :param skip_active_prefix: If True, skip sys.prefix when it matches a hit.
+    :return: Sorted list of absolute directory paths.
+    """
+    start = os.path.abspath(os.path.expanduser(root or "~"))
+    if not os.path.isdir(start):
+        return []
+
+    active_prefix = ""
+    if skip_active_prefix:
+        try:
+            active_prefix = os.path.abspath(sys.prefix)
+        except Exception:
+            active_prefix = ""
+
+    found: List[str] = []
+    start_depth = start.rstrip(os.sep).count(os.sep)
+
+    for dirpath, dirnames, _ in os.walk(start, topdown=True, onerror=lambda e: None):
+        depth = dirpath.rstrip(os.sep).count(os.sep) - start_depth
+        if depth >= max_depth:
+            dirnames[:] = []
+            continue
+
+        keep: List[str] = []
+        for name in dirnames:
+            if name in target_names:
+                candidate = os.path.join(dirpath, name)
+                if os.path.islink(candidate):
+                    continue
+                if not os.path.isdir(candidate):
+                    continue
+                if active_prefix and (
+                    candidate == active_prefix
+                    or active_prefix.startswith(candidate + os.sep)
+                ):
+                    continue
+                found.append(candidate)
+                continue
+            if name in HOME_SCAN_SKIP_DIR_NAMES:
+                continue
+            child = os.path.join(dirpath, name)
+            if os.path.islink(child):
+                continue
+            keep.append(name)
+        dirnames[:] = keep
+
+    found.sort()
+    return found
+
+
+def find_python_artifact_dirs(
+    root: Optional[str] = None,
+    max_depth: int = PYTHON_ARTIFACT_MAX_DEPTH,
+) -> List[str]:
+    """
+    Find regeneratable Python directories (__pycache__, .venv) under root.
+
+    Skips the active interpreter prefix when it is a .venv path.
+    """
+    return find_named_dirs_under_home(
+        PYTHON_ARTIFACT_DIR_NAMES,
+        root=root,
+        max_depth=max_depth,
+        skip_active_prefix=True,
+    )
+
+
+def find_local_history_dirs(
+    root: Optional[str] = None,
+    max_depth: int = HOME_SCAN_MAX_DEPTH,
+) -> List[str]:
+    """
+    Find editor Local History folders (.history) under root.
+
+    These come from extensions such as xyz.local-history and store
+    timeline/history snapshots. Deleting them removes that history data.
+    """
+    return find_named_dirs_under_home(
+        LOCAL_HISTORY_DIR_NAMES,
+        root=root,
+        max_depth=max_depth,
+        skip_active_prefix=False,
+    )
 
 
 def exists_in_path(binary: str) -> bool:
@@ -249,6 +580,9 @@ def trash_paths(patterns: List[str]) -> Tuple[int, str]:
         for p in glob.glob(os.path.expanduser(pattern), recursive=False):
             if os.path.abspath(p).startswith(os.path.abspath(os.path.expanduser("~/.local/share/Trash/"))):
                 continue
+            if is_protected_path(p):
+                logs.append(f"Skipped protected path: {p}")
+                continue
             try:
                 if use_gio:
                     proc = subprocess.run(["gio", "trash", p], text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
@@ -280,6 +614,9 @@ def rm_paths(patterns: List[str]) -> Tuple[int, str]:
     logs = []
     for pattern in patterns:
         for p in glob.glob(os.path.expanduser(pattern), recursive=False):
+            if is_protected_path(p):
+                logs.append(f"Skipped protected path: {p}")
+                continue
             try:
                 if os.path.isdir(p) and not os.path.islink(p):
                     shutil.rmtree(p, ignore_errors=True)
@@ -442,6 +779,8 @@ class MintCleanerApp(tk.Tk):
         self.var_config_app_caches = tk.BooleanVar(master=self, value=False)   # Conservative ~/.config cache-only paths
         self.var_dev_tool_caches = tk.BooleanVar(master=self, value=False)     # npm/yarn/pnpm/cargo/gradle caches
         self.var_user_lang_tool_caches = tk.BooleanVar(master=self, value=False)  # pip/poetry/uv/go/fontconfig/mesa caches
+        self.var_python_artifacts = tk.BooleanVar(master=self, value=False)    # __pycache__ and .venv under ~
+        self.var_local_history = tk.BooleanVar(master=self, value=False)       # .history Local History snapshots
         self.var_apt_cache = tk.BooleanVar(master=self, value=False)           # /var/cache/apt/archives/*
         self.var_system_misc_caches = tk.BooleanVar(master=self, value=False)  # Common /var cache and crash directories
         self.var_system_extra_caches = tk.BooleanVar(master=self, value=False) # PackageKit/fwupd/ldconfig/coredump caches
@@ -472,6 +811,8 @@ class MintCleanerApp(tk.Tk):
             "config_app_caches": CONFIG_CACHE_PATTERNS,
             "dev_tool_caches": DEV_TOOL_CACHE_PATTERNS,
             "user_lang_tool_caches": USER_LANG_TOOL_CACHE_PATTERNS,
+            "python_artifacts": [],  # filled by refresh_sizes via find_python_artifact_dirs()
+            "local_history": [],  # filled by refresh_sizes via find_local_history_dirs()
             "system_misc_caches": SYSTEM_MISC_CACHE_PATTERNS,
             "system_extra_caches": SYSTEM_EXTRA_CACHE_PATTERNS,
             "apt_cache": ["/var/cache/apt/archives/*", "/var/cache/apt/archives/partial/*"],
@@ -675,9 +1016,14 @@ class MintCleanerApp(tk.Tk):
         ttk.Label(journal_frame, text="(3d, 7d, 100M)").pack(side=tk.LEFT, padx=(6, 0))
 
         row = 0
-        self.widgets["user_cache"] = tk.Checkbutton(user_tab, text="~/.cache/*", variable=self.var_user_cache, **checkbox_opts)
+        self.widgets["user_cache"] = tk.Checkbutton(
+            user_tab,
+            text="~/.cache/* (keeps dconf/session dirs — protects desktop icons)",
+            variable=self.var_user_cache,
+            **checkbox_opts,
+        )
         self.widgets["user_cache"].grid(row=row, column=0, sticky="w", pady=4)
-        self.base_text["user_cache"] = "~/.cache/*"
+        self.base_text["user_cache"] = "~/.cache/* (keeps dconf/session dirs — protects desktop icons)"
         row += 1
 
         self.widgets["thumbnails"] = tk.Checkbutton(user_tab, text="~/.thumbnails/*", variable=self.var_thumbnails, **checkbox_opts)
@@ -735,6 +1081,26 @@ class MintCleanerApp(tk.Tk):
         self.base_text["user_lang_tool_caches"] = "Language and tool caches (pip, Poetry, uv, go-build, node-gyp, fontconfig, mesa)"
         row += 1
 
+        self.widgets["python_artifacts"] = tk.Checkbutton(
+            user_tab,
+            text="Python leftovers (__pycache__, .venv under home)",
+            variable=self.var_python_artifacts,
+            **checkbox_opts,
+        )
+        self.widgets["python_artifacts"].grid(row=row, column=0, sticky="w", pady=4)
+        self.base_text["python_artifacts"] = "Python leftovers (__pycache__, .venv under home)"
+        row += 1
+
+        self.widgets["local_history"] = tk.Checkbutton(
+            user_tab,
+            text="Editor Local History (.history) — deletes timeline/history data",
+            variable=self.var_local_history,
+            **checkbox_opts,
+        )
+        self.widgets["local_history"].grid(row=row, column=0, sticky="w", pady=4)
+        self.base_text["local_history"] = "Editor Local History (.history) — deletes timeline/history data"
+        row += 1
+
         self.widgets["flatpak_user_unused"] = tk.Checkbutton(user_tab, text="Flatpak user: uninstall unused [size unknown]", variable=self.var_flatpak_user, **checkbox_opts)
         self.widgets["flatpak_user_unused"].grid(row=row, column=0, sticky="w", pady=4)
         self.base_text["flatpak_user_unused"] = "Flatpak user: uninstall unused [size unknown]"
@@ -783,6 +1149,7 @@ class MintCleanerApp(tk.Tk):
             self.var_tmp, self.var_user_cache, self.var_thumbnails, self.var_trash,
             self.var_firefox, self.var_chrome, self.var_config_app_caches,
             self.var_dev_tool_caches, self.var_user_lang_tool_caches,
+            self.var_python_artifacts, self.var_local_history,
             self.var_flatpak_user, self.var_flatpak_repair_user,
             self.var_flatpak_syscache, self.var_flatpak_repair_system, self.var_apt,
             self.var_journal, self.var_flatpak_app_cache, self.var_apt_cache,
@@ -826,6 +1193,8 @@ class MintCleanerApp(tk.Tk):
             "config_app_caches": self.var_config_app_caches,
             "dev_tool_caches": self.var_dev_tool_caches,
             "user_lang_tool_caches": self.var_user_lang_tool_caches,
+            "python_artifacts": self.var_python_artifacts,
+            "local_history": self.var_local_history,
             "system_misc_caches": self.var_system_misc_caches,
             "system_extra_caches": self.var_system_extra_caches,
             "apt_cache": self.var_apt_cache,   # Now measurable via root
@@ -855,6 +1224,8 @@ class MintCleanerApp(tk.Tk):
             "config_app_caches": self.var_config_app_caches,
             "dev_tool_caches": self.var_dev_tool_caches,
             "user_lang_tool_caches": self.var_user_lang_tool_caches,
+            "python_artifacts": self.var_python_artifacts,
+            "local_history": self.var_local_history,
             "system_misc_caches": self.var_system_misc_caches,
             "system_extra_caches": self.var_system_extra_caches,
             "apt_cache": self.var_apt_cache,
@@ -882,13 +1253,17 @@ class MintCleanerApp(tk.Tk):
             "tmp", "user_cache", "thumbnails", "trash",
             "firefox", "chrome", "flatpak_syscache", "apt", "journal",
             "flatpak_app_cache", "config_app_caches", "dev_tool_caches",
-            "user_lang_tool_caches", "system_misc_caches", "system_extra_caches", "apt_cache"
+            "user_lang_tool_caches", "python_artifacts", "local_history",
+            "system_misc_caches", "system_extra_caches", "apt_cache"
         ]
         sizes_now: Dict[str, int] = {}
         root_measurable_keys = {
             "tmp", "flatpak_syscache", "apt", "journal",
             "system_misc_caches", "system_extra_caches", "apt_cache"
         }
+        # Rediscover regeneratable dirs before measuring.
+        self.patterns["python_artifacts"] = find_python_artifact_dirs()
+        self.patterns["local_history"] = find_local_history_dirs()
         for key in measurable:
             patterns = self.patterns.get(key, [])
             if key in root_measurable_keys:
@@ -969,6 +1344,15 @@ class MintCleanerApp(tk.Tk):
             plan["user_py_delete"] += self.patterns.get("dev_tool_caches", [])
         if self.var_user_lang_tool_caches.get():
             plan["user_py_delete"] += self.patterns.get("user_lang_tool_caches", [])
+        if self.var_python_artifacts.get():
+            # Rediscover at plan time so paths stay current.
+            artifacts = find_python_artifact_dirs()
+            self.patterns["python_artifacts"] = artifacts
+            plan["user_py_delete"] += artifacts
+        if self.var_local_history.get():
+            history_dirs = find_local_history_dirs()
+            self.patterns["local_history"] = history_dirs
+            plan["user_py_delete"] += history_dirs
 
         # User commands
         if self.var_flatpak_user.get():
@@ -1018,6 +1402,12 @@ class MintCleanerApp(tk.Tk):
             log_append(self.log, "User deletions, paths:")
             for p in plan["user_py_delete"]:
                 log_append(self.log, f"  - {p}")
+            if self.var_local_history.get():
+                log_append(
+                    self.log,
+                    "Note: Removing .history deletes editor Local History "
+                    "timeline/history data (not regeneratable from Git).",
+                )
         if plan["user_cmds"]:
             log_append(self.log, "User commands:")
             for c in plan["user_cmds"]:
@@ -1047,6 +1437,8 @@ class MintCleanerApp(tk.Tk):
         if self.var_config_app_caches.get(): selected_keys.append("config_app_caches")
         if self.var_dev_tool_caches.get(): selected_keys.append("dev_tool_caches")
         if self.var_user_lang_tool_caches.get(): selected_keys.append("user_lang_tool_caches")
+        if self.var_python_artifacts.get(): selected_keys.append("python_artifacts")
+        if self.var_local_history.get(): selected_keys.append("local_history")
         if self.var_flatpak_syscache.get(): selected_keys.append("flatpak_syscache")
         if self.var_apt.get(): selected_keys.append("apt")
         if self.var_journal.get(): selected_keys.append("journal")
@@ -1060,6 +1452,10 @@ class MintCleanerApp(tk.Tk):
             "tmp", "flatpak_syscache", "apt", "journal",
             "system_misc_caches", "system_extra_caches", "apt_cache"
         }
+        if "python_artifacts" in selected_keys:
+            self.patterns["python_artifacts"] = find_python_artifact_dirs()
+        if "local_history" in selected_keys:
+            self.patterns["local_history"] = find_local_history_dirs()
         for k in selected_keys:
             if k in root_measurable_keys:
                 patterns = self.patterns.get(k, [])
@@ -1078,6 +1474,12 @@ class MintCleanerApp(tk.Tk):
             return
 
         log_append(self.log, "=== Cleanup started ===")
+        if self.var_local_history.get():
+            log_append(
+                self.log,
+                "[WARN] Local History (.history): editor timeline/history "
+                "snapshots will be permanently removed.",
+            )
 
         to_trash: List[str] = []
         to_delete_user: List[str] = []
@@ -1144,6 +1546,13 @@ class MintCleanerApp(tk.Tk):
         log_append(self.log, "Refreshing size view ...")
         self.refresh_sizes()
         log_append(self.log, "=== Cleanup finished ===")
+        changed, msg = repair_user_hicolor_shadow()
+        if changed:
+            log_append(self.log, f"[FIX] {msg}")
+        elif "shadow" not in msg:
+            pass
+        else:
+            log_append(self.log, f"[OK] {msg}")
 
     def _log_cleanup_success(self, reclaimed_total_bytes: int, selected_count: int) -> None:
         """
@@ -1211,6 +1620,9 @@ def helper_main() -> None:
     - run_root_cmds
     - get_size (compute total size of root patterns)
     """
+    # Belt-and-suspenders: sanitize again in case imports restored session vars.
+    sanitize_helper_environment()
+
     def send_ok(data: Any = True) -> None:
         print(json.dumps({"status": "ok", "data": data}), flush=True)
 
@@ -1221,18 +1633,26 @@ def helper_main() -> None:
         out: List[str] = []
         for pat in patterns:
             for p in glob.glob(pat, recursive=False):
+                if is_protected_path(p):
+                    continue
                 out.append(p)
         return out
 
     def _size_of_path(p: str) -> int:
         """Compute size of a single file/directory (no glob)."""
-        if not os.path.exists(p):
+        if not os.path.exists(p) or is_protected_path(p):
             return 0
         if os.path.isdir(p) and not os.path.islink(p):
             total = 0
-            for root, _, files in os.walk(p, onerror=lambda e: None):
+            for root, dirnames, files in os.walk(p, onerror=lambda e: None):
+                dirnames[:] = [
+                    d for d in dirnames
+                    if not is_protected_path(os.path.join(root, d))
+                ]
                 for f in files:
                     fp = os.path.join(root, f)
+                    if is_protected_path(fp):
+                        continue
                     try:
                         if not os.path.islink(fp):
                             total += os.path.getsize(fp)
@@ -1250,6 +1670,8 @@ def helper_main() -> None:
         total = 0
         for pat in patterns:
             for p in glob.glob(pat, recursive=False):
+                if is_protected_path(p):
+                    continue
                 total += _size_of_path(p)
         return total
 
@@ -1274,6 +1696,11 @@ def helper_main() -> None:
                 pats: List[str] = args.get("patterns") or []
                 expanded = _expand_patterns(pats)
                 log_lines: List[str] = []
+                # Also report any protected matches that were skipped.
+                for pat in pats:
+                    for p in glob.glob(pat, recursive=False):
+                        if is_protected_path(p):
+                            log_lines.append(f"Skipped protected path: {p}")
                 rc_global = 0
                 for p in expanded:
                     try:
@@ -1335,4 +1762,6 @@ if __name__ == "__main__":
         maybe_prompt_nemo_setup(_root)
         maybe_prompt_desktop_setup(_root)
         _root.destroy()
+        # Fix incomplete user hicolor overlays that hide Nemo toolbar icons.
+        repair_user_hicolor_shadow()
         main()
