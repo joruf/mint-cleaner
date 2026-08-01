@@ -88,3 +88,23 @@ git clone https://github.com/joruf/mint-cleaner.git
 cd mint-cleaner
 chmod +x mint-cleaner.py
 ./mint-cleaner.py
+
+## Testing
+
+```bash
+python3 -m unittest discover -s tests -v
+```
+
+CI runs the unit suite on Ubuntu 22.04/24.04 (Python 3.11 and 3.12) on every push and
+pull request. **Windows is not supported** — this tool targets Linux Mint / Debian-based
+systems only.
+
+### Multi-OS matrix (local Linux host)
+
+```bash
+~/os-test-matrix/bin/test-project /path/to/mint-cleaner
+~/os-test-matrix/bin/test-project "$PWD" --only ubuntu-2404
+```
+
+On-demand Linux runners: [`OS Matrix`](.github/workflows/os-matrix.yml).
+Results: `~/os-test-matrix/results/`.

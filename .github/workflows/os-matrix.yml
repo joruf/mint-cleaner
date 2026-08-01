@@ -1,0 +1,61 @@
+name: OS Matrix
+
+# On-demand multi-OS checks for local matrix tooling (os-test-matrix).
+on:
+  workflow_dispatch:
+    inputs:
+      test_mode:
+        description: "contract = default automated checks; full = extended checks"
+        type: choice
+        options:
+          - contract
+          - full
+        default: contract
+      runner_os:
+        description: "GitHub-hosted runner OS"
+        type: choice
+        options:
+          - ubuntu-24.04
+          - ubuntu-22.04
+        default: ubuntu-24.04
+      python_version:
+        description: "Python version"
+        type: choice
+        options:
+          - "3.12"
+          - "3.11"
+        default: "3.12"
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: ${{ inputs.test_mode }} on ${{ inputs.runner_os }} (py${{ inputs.python_version }})
+    runs-on: ${{ inputs.runner_os }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Linux system dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            python3-tk \
+            policykit-1
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ inputs.python_version }}
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          echo 'stdlib + tkinter only'
+
+      - name: Run contract checks
+        run: |
+          python -m unittest discover -s tests -v
+
