@@ -6,7 +6,7 @@ from unittest import mock
 
 
 SCRIPT_PATH = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "..", "mint-cleaner.py")
+    os.path.join(os.path.dirname(__file__), "..", "run.py")
 )
 
 SPEC = importlib.util.spec_from_file_location("mint_cleaner", SCRIPT_PATH)

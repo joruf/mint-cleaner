@@ -6,12 +6,23 @@ Uses a single `pkexec` authentication at startup – no repeated password prompt
 ## Features
 
 - **Single authentication** – privileged helper runs with `pkexec`, one‑time password entry.
-- **Live size analysis** – shows current MB usage for all measurable categories.
-- **Auto‑select by threshold** – automatically ticks items larger than 100 MB (configurable).
-- **Auto‑deselect** – untick items that are 0 MB or have unknown size.
+- **Startup progress** – the size analysis runs in the background behind a modal
+  progress bar that lists every category with its status (done / running / pending),
+  the measured size, a step counter and a percentage. The window never freezes.
+- **Live size analysis** – shows the current MB/GB usage of all measurable categories.
+- **Auto‑select by threshold** – automatically ticks items larger than 100 MB (configurable).
+- **Auto‑deselect** – untick items that are 0 MB or have unknown size.
 - **User deletion mode** – choose **Move to Trash** (default) or **Delete immediately**.
-- **Modern UI** – grouped categories (System / User), clear icons, and a detailed log area.
-- **No confirmation popups** – all progress is shown directly in the log.
+- **Background cleanup** – the cleanup runs with the same progress checklist
+  (measure → delete → measure → read disk usage).
+- **Persistent result table** – after a cleanup the table at the bottom shows,
+  left to right: free space before the cleanup, the space that was freed, and the
+  free space available now. The same table is written into the activity log. The
+  values stay visible until the next run.
+- **Taskbar icon** – window and panel icon, generated as PNG without any image
+  library (see `ui/window_icon.py`), plus `StartupWMClass` so the panel matches the launcher.
+- **Modern UI** – grouped categories (System / User) in scrollable tabs and a detailed log area.
+- **No confirmation popups** – all progress is shown in the progress dialog and in the log.
 
 ## Requirements
 
@@ -86,8 +97,42 @@ User tasks (run as your user)
 ```bash
 git clone https://github.com/joruf/mint-cleaner.git
 cd mint-cleaner
-chmod +x mint-cleaner.py
-./mint-cleaner.py
+python3 run.py
+```
+
+`run.py` is the entry point. On the first start Mint Cleaner offers to create a
+desktop shortcut and a Nemo context menu entry; launchers created by older
+versions are updated automatically. The application icons are rendered once into
+`resources/` (or `~/.cache/mint-cleaner/` when the program directory is read-only).
+
+## Project structure
+
+```
+mint-cleaner/
+├── run.py                          # Entry point; cleanup logic, GUI class and privileged helper
+├── paths.py                        # Central path constants for resources, desktop file and markers
+├── README.md                       # Project documentation
+├── .gitignore                      # Git ignore rules for local and generated files
+├── .gitattributes                  # Git line-ending and file attribute rules
+│
+├── ui/                             # Everything that draws or prompts
+│   ├── __init__.py                 # Package marker
+│   ├── window_icon.py              # Renders the PNG icon and applies _NET_WM_ICON
+│   ├── progress_dialog.py          # Modal progress dialog for scan and cleanup jobs
+│   ├── desktop_setup.py            # Creates and refreshes the desktop shortcut
+│   └── nemo_setup.py               # Creates and refreshes the Nemo context menu action
+│
+├── services/                       # Logic without GUI
+│   ├── __init__.py                 # Package marker
+│   └── dependencies.py             # Checks runtime dependencies and offers apt install
+│
+├── resources/                      # Shipped and generated resources
+│   ├── mint-cleaner.desktop        # Desktop entry template
+│   └── mint-cleaner-*.png          # Icons, generated on first start (not in version control)
+│
+├── tests/                          # Unit tests, run with unittest or pytest
+└── .github/workflows/              # CI and multi-OS matrix
+```
 
 ## Testing
 

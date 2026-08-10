@@ -3,3 +3,8 @@
 .venv/
 .initialized
 tests/__pycache__/
+ui/__pycache__/
+services/__pycache__/
+.pytest_cache/
+# Application icons, generated on first start by ui/window_icon.py
+/resources/mint-cleaner-*.png

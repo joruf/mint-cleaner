@@ -4,8 +4,8 @@ Type=Application
 Name=Mint Cleaner
 Comment=Selective temp and cache cleanup for Linux Mint
 Icon=edit-clear-symbolic
-Exec=python3 mint-cleaner.py
+Exec=python3 run.py
 Terminal=false
 Categories=Utility;System;
 StartupNotify=true
-
+StartupWMClass=Mint-cleaner

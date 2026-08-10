@@ -6,18 +6,21 @@ First-run setup for Nemo context menu integration.
 
 On the first application start the user is asked once whether a Nemo action
 should be installed under ~/.local/share/nemo/actions/. The shared .initialized
-marker file in the project directory prevents repeated prompts.
+marker file in the project directory prevents repeated prompts. An action that
+was installed by an older version is refreshed on every start so it keeps
+pointing at run.py.
 """
 
 from pathlib import Path
 
 from tkinter import messagebox
 
-SCRIPT_DIR = Path(__file__).resolve().parent
-INIT_FILE = SCRIPT_DIR / ".initialized"
+from paths import INIT_FILE, MAIN_SCRIPT
+from ui.window_icon import desktop_icon_value
+
 NEMO_ACTIONS_DIR = Path.home() / ".local" / "share" / "nemo" / "actions"
 ACTION_FILENAME = "mint-cleaner.nemo_action"
-MINT_CLEANER_SCRIPT = SCRIPT_DIR / "mint-cleaner.py"
+MINT_CLEANER_SCRIPT = MAIN_SCRIPT
 
 
 def build_nemo_action_content() -> str:
@@ -32,7 +35,7 @@ def build_nemo_action_content() -> str:
         "Name=Mint Cleaner\n"
         "Comment=Starts Mint Cleaner for selective temp and cache cleanup\n"
         f"Exec=python3 {MINT_CLEANER_SCRIPT}\n"
-        "Icon=edit-clear-symbolic\n"
+        f"Icon={desktop_icon_value()}\n"
         "\n"
         "# Shown on right-click on folders or in an empty window\n"
         "Selection=any\n"
@@ -50,6 +53,29 @@ def install_nemo_action() -> bool:
         NEMO_ACTIONS_DIR.mkdir(parents=True, exist_ok=True)
         action_path = NEMO_ACTIONS_DIR / ACTION_FILENAME
         action_path.write_text(build_nemo_action_content(), encoding="utf-8")
+        return True
+    except OSError:
+        return False
+
+
+def refresh_nemo_action() -> bool:
+    """
+    Update an already installed Nemo action when its content is outdated.
+
+    Keeps context menu entries created by earlier versions working after the
+    start script was renamed to run.py.
+
+    @return bool True when the action file was rewritten
+    """
+    action_path = NEMO_ACTIONS_DIR / ACTION_FILENAME
+    if not action_path.is_file():
+        return False
+
+    expected = build_nemo_action_content()
+    try:
+        if action_path.read_text(encoding="utf-8") == expected:
+            return False
+        action_path.write_text(expected, encoding="utf-8")
         return True
     except OSError:
         return False
