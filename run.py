@@ -88,7 +88,7 @@ from tkinter.scrolledtext import ScrolledText
 from ui.desktop_setup import maybe_prompt_desktop_setup, refresh_desktop_shortcut
 from ui.nemo_setup import maybe_prompt_nemo_setup, refresh_nemo_action
 from ui.progress_dialog import ProgressDialog
-from ui.window_icon import WM_CLASS_NAME, apply_window_icon
+from ui.window_icon import WM_CLASS_NAME, apply_window_icon, glyph_photo_image
 from datetime import datetime
 from urllib.parse import quote
 
@@ -168,6 +168,16 @@ PREVIEW_TABLE_LOG_HEADERS: Tuple[str, ...] = ("Now free", "Can free", "Afterward
 
 # Width in characters the activity log can show without wrapping.
 LOG_WIDTH_CHARS = 46
+
+# Colors of the highlighted main action button ("Clean Selected").
+PRIMARY_BUTTON_BG = "#1e7f3b"
+PRIMARY_BUTTON_ACTIVE = "#25984a"
+PRIMARY_BUTTON_PRESSED = "#17662f"
+PRIMARY_BUTTON_DISABLED = "#9aa5ae"
+PRIMARY_BUTTON_FG = "#ffffff"
+
+# Edge length of the broom glyph shown inside the main action button.
+PRIMARY_BUTTON_GLYPH_SIZE = 22
 
 # Colors of the result table, the border color also draws the grid lines.
 TABLE_BORDER_COLOR = "#c3c9d0"
@@ -1780,7 +1790,40 @@ class MintCleanerApp(tk.Tk):
             padding=[("selected", (14, 10)), ("!selected", (10, 6))],
             font=[("selected", ("Segoe UI", 10, "bold")), ("!selected", ("Segoe UI", 9))],
         )
-        style.configure("Primary.TButton", font=("Segoe UI", 10, "bold"), padding=(14, 8))
+        # The main action is the only colored button, so it stands out clearly
+        # against the secondary actions next to it.
+        style.configure(
+            "Primary.TButton",
+            font=("Segoe UI", 11, "bold"),
+            padding=(14, 11),
+            foreground=PRIMARY_BUTTON_FG,
+            background=PRIMARY_BUTTON_BG,
+            bordercolor=PRIMARY_BUTTON_ACTIVE,
+            lightcolor=PRIMARY_BUTTON_BG,
+            darkcolor=PRIMARY_BUTTON_BG,
+            focuscolor=PRIMARY_BUTTON_FG,
+        )
+        style.map(
+            "Primary.TButton",
+            background=[
+                ("disabled", PRIMARY_BUTTON_DISABLED),
+                ("pressed", PRIMARY_BUTTON_PRESSED),
+                ("active", PRIMARY_BUTTON_ACTIVE),
+            ],
+            foreground=[("disabled", "#f0f2f4")],
+            lightcolor=[
+                ("disabled", PRIMARY_BUTTON_DISABLED),
+                ("pressed", PRIMARY_BUTTON_PRESSED),
+                ("active", PRIMARY_BUTTON_ACTIVE),
+            ],
+            darkcolor=[
+                ("disabled", PRIMARY_BUTTON_DISABLED),
+                ("pressed", PRIMARY_BUTTON_PRESSED),
+                ("active", PRIMARY_BUTTON_ACTIVE),
+            ],
+        )
+        # Secondary actions stay quiet, they only support the main action.
+        style.configure("Secondary.TButton", font=("Segoe UI", 9), padding=(10, 6))
 
     def _build_ui(self) -> None:
         """
@@ -2069,15 +2112,34 @@ class MintCleanerApp(tk.Tk):
         ttk.Label(right_actions, text="1) Select categories  2) Preview  3) Clean", style="Hint.TLabel").pack(anchor="w", pady=(0, 8))
 
         self.clean_button = ttk.Button(
-            right_actions, text="Clean Selected", style="Primary.TButton", command=self.on_clean_clicked
+            right_actions,
+            text="Clean Selected",
+            style="Primary.TButton",
+            command=self.on_clean_clicked,
         )
-        self.clean_button.pack(fill=tk.X, pady=(0, 6))
+        # Broom glyph inside the button, rendered in memory so it needs no font
+        # with emoji coverage and no extra file.
+        self.clean_button_glyph = glyph_photo_image(
+            self, PRIMARY_BUTTON_GLYPH_SIZE, (0xFF, 0xFF, 0xFF)
+        )
+        if self.clean_button_glyph is not None:
+            self.clean_button.configure(
+                image=self.clean_button_glyph, compound=tk.LEFT, padding=(12, 10)
+            )
+        self.clean_button.pack(fill=tk.X, pady=(0, 12))
+
         self.preview_button = ttk.Button(
-            right_actions, text="Preview Commands", command=self.on_preview
+            right_actions,
+            text="Preview Commands",
+            style="Secondary.TButton",
+            command=self.on_preview,
         )
         self.preview_button.pack(fill=tk.X, pady=(0, 6))
         self.refresh_button = ttk.Button(
-            right_actions, text="Refresh Sizes", command=self.refresh_sizes
+            right_actions,
+            text="Refresh Sizes",
+            style="Secondary.TButton",
+            command=self.refresh_sizes,
         )
         self.refresh_button.pack(fill=tk.X)
         for button in (self.clean_button, self.preview_button, self.refresh_button):

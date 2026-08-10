@@ -26,6 +26,8 @@ Uses a single `pkexec` authentication at startup – no repeated password prompt
 - **Taskbar icon** – window and panel icon, generated as PNG without any image
   library (see `ui/window_icon.py`), plus `StartupWMClass` so the panel matches the launcher.
 - **Modern UI** – grouped categories (System / User) in scrollable tabs and a detailed log area.
+  **Clean Selected** is the only colored button and carries the broom glyph, so the
+  main action is unmistakable next to the secondary ones.
 - **No confirmation popups** – all progress is shown in the progress dialog and in the log.
 
 ## Requirements

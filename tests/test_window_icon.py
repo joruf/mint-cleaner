@@ -61,6 +61,65 @@ class RenderIconTests(unittest.TestCase):
             window_icon.render_icon_rows(4)
 
 
+def _glyph_alpha_at(rows, size: int, glyph_x: float, glyph_y: float) -> int:
+    """Return the alpha byte of the pixel at a point given in icon coordinates."""
+    left, top, right, bottom = window_icon._GLYPH_BOUNDS
+    center_x, center_y = (left + right) / 2.0, (top + bottom) / 2.0
+    scale = (1.0 - 2.0 * window_icon._GLYPH_MARGIN) / max(right - left, bottom - top)
+    pixel_x = int((0.5 + (glyph_x - center_x) * scale) * size)
+    pixel_y = int((0.5 + (glyph_y - center_y) * scale) * size)
+    return rows[pixel_y][pixel_x * 4 + 3]
+
+
+class RenderGlyphTests(unittest.TestCase):
+    """The broom glyph is drawn without the tile, for use on a colored button."""
+
+    def test_render_glyph_png_is_valid_rgba_png(self):
+        size = 24
+
+        parsed = _parse_png(window_icon.render_glyph_png(size))
+
+        self.assertEqual((parsed["width"], parsed["height"]), (size, size))
+        self.assertEqual(parsed["color_type"], 6)  # RGBA
+        self.assertEqual(len(zlib.decompress(parsed["idat"])), size * (1 + size * 4))
+
+    def test_glyph_uses_one_color_and_a_transparent_background(self):
+        size = 32
+        color = (0x11, 0x22, 0x33)
+
+        rows = window_icon.render_glyph_rows(size, color)
+
+        for row in rows:
+            for index in range(0, len(row), 4):
+                self.assertEqual(tuple(row[index:index + 3]), color)
+        # No background tile, so the corners stay empty.
+        for row, index in ((rows[0], 0), (rows[0], size - 1),
+                           (rows[size - 1], 0), (rows[size - 1], size - 1)):
+            self.assertEqual(row[index * 4 + 3], 0)
+
+    def test_glyph_is_solid_along_the_handle_and_cut_at_the_ferrule(self):
+        size = 120
+        rows = window_icon.render_glyph_rows(size)
+
+        handle_middle = (
+            (window_icon._HANDLE_START[0] + window_icon._HANDLE_END[0]) / 2.0,
+            (window_icon._HANDLE_START[1] + window_icon._HANDLE_END[1]) / 2.0,
+        )
+        ferrule_middle = (
+            (window_icon._FERRULE_START[0] + window_icon._FERRULE_END[0]) / 2.0,
+            (window_icon._FERRULE_START[1] + window_icon._FERRULE_END[1]) / 2.0,
+        )
+
+        self.assertEqual(_glyph_alpha_at(rows, size, *handle_middle), 255)
+        ferrule_alpha = _glyph_alpha_at(rows, size, *ferrule_middle)
+        self.assertGreater(ferrule_alpha, 0)
+        self.assertLess(ferrule_alpha, 128)
+
+    def test_render_glyph_rejects_tiny_sizes(self):
+        with self.assertRaises(ValueError):
+            window_icon.render_glyph_rows(4)
+
+
 class WindowIconLimitTests(unittest.TestCase):
     def test_window_icon_sizes_fit_into_one_x_property_request(self):
         words = window_icon.window_icon_property_words()

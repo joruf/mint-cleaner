@@ -320,6 +320,100 @@ def render_icon_rows(size: int) -> List[bytes]:
     return rows
 
 
+# Bounding box of the broom inside the icon tile, used to center and scale the
+# standalone glyph. The tile leaves room for the sparkles, a button icon should
+# use its whole box instead.
+_GLYPH_BOUNDS: Tuple[float, float, float, float] = (0.10, 0.09, 0.74, 0.91)
+_GLYPH_MARGIN = 0.04
+
+
+def render_glyph_rows(
+    size: int,
+    color: Tuple[int, int, int] = FOREGROUND,
+) -> List[bytes]:
+    """
+    Render only the broom of the icon, without the rounded background tile.
+
+    The glyph is drawn in a single color on a transparent background, so it can
+    be placed on a colored button. Ferrule and bristle lines are cut out of the
+    silhouette instead of being painted, which keeps the broom readable on any
+    button color.
+
+    @param size Edge length of the square glyph in pixels
+    @param color RGB color of the glyph
+    @return list[bytes] One RGBA row per pixel line
+    """
+    if size < 8:
+        raise ValueError("glyph size must be at least 8 pixels")
+
+    left, top, right, bottom = _GLYPH_BOUNDS
+    center_x, center_y = (left + right) / 2.0, (top + bottom) / 2.0
+    scale = (1.0 - 2.0 * _GLYPH_MARGIN) / max(right - left, bottom - top)
+
+    # Sampling happens in glyph space, so the anti-aliasing band grows with the
+    # inverse of the scale factor.
+    edge = 1.5 / size / scale
+    solid: Tuple[Callable[[float, float], float], ...] = (
+        lambda x, y: _sdf_convex_polygon(x, y, _HEAD_QUAD) - _HEAD_CORNER_RADIUS,
+        lambda x, y: _sdf_capsule(x, y, _HANDLE_START, _HANDLE_END, _HANDLE_RADIUS),
+    )
+    cutouts: Tuple[Tuple[Callable[[float, float], float], float], ...] = (
+        (lambda x, y: _sdf_capsule(x, y, _FERRULE_START, _FERRULE_END, _FERRULE_RADIUS), 0.75),
+    ) + tuple(
+        (lambda x, y, a=start, b=end: _sdf_capsule(x, y, a, b, _BRISTLE_RADIUS), 0.55)
+        for start, end in _BRISTLE_LINES
+    )
+
+    red, green, blue = color
+    pixel = bytes((red, green, blue))
+    rows: List[bytes] = []
+
+    for pixel_y in range(size):
+        y = center_y + ((pixel_y + 0.5) / size - 0.5) / scale
+        row = bytearray()
+        for pixel_x in range(size):
+            x = center_x + ((pixel_x + 0.5) / size - 0.5) / scale
+            alpha = 0.0
+            for distance_fn in solid:
+                alpha = max(alpha, _coverage(distance_fn(x, y), edge))
+            if alpha > 0.0:
+                for distance_fn, strength in cutouts:
+                    alpha *= 1.0 - _coverage(distance_fn(x, y), edge) * strength
+            row += pixel + bytes((int(alpha * 255.0 + 0.5),))
+        rows.append(bytes(row))
+    return rows
+
+
+def render_glyph_png(size: int, color: Tuple[int, int, int] = FOREGROUND) -> bytes:
+    """
+    Render the broom glyph and return it as PNG bytes.
+
+    @param size Edge length of the square glyph in pixels
+    @param color RGB color of the glyph
+    @return bytes PNG file content
+    """
+    return encode_png(render_glyph_rows(size, color), size, size)
+
+
+def glyph_photo_image(window, size: int, color: Tuple[int, int, int] = FOREGROUND):
+    """
+    Build a Tk image of the broom glyph, without touching the file system.
+
+    @param window Tk widget used as image master
+    @param size Edge length of the square glyph in pixels
+    @param color RGB color of the glyph
+    @return tkinter.PhotoImage | None Image, or None when Tk cannot load it
+    """
+    import base64
+    import tkinter as tk
+
+    try:
+        payload = base64.b64encode(render_glyph_png(size, color))
+        return tk.PhotoImage(master=window, data=payload)
+    except Exception:
+        return None
+
+
 def _png_chunk(tag: bytes, data: bytes) -> bytes:
     """
     Build a single PNG chunk including length and CRC.
