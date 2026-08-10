@@ -142,17 +142,29 @@ DISCOVERED_KEYS: Tuple[str, ...] = (
     "node_modules", "composer_vendor", "build_output",
 )
 
-# Columns of the cleanup result table, left to right:
-# free space before the cleanup, amount freed, free space available now.
+# Columns of the disk space table, left to right: free space before the cleanup,
+# the amount that was freed, and the free space available afterwards. These
+# captions are used once a cleanup has run.
 RESULT_TABLE_COLUMNS: Tuple[Tuple[str, str, str], ...] = (
     ("Free space before cleanup", "before", "#2c3e50"),
     ("Space freed", "freed", "#1e7f3b"),
     ("Free space available now", "after", "#1a5fb4"),
 )
 
+# Captions of the same table while it projects what the current selection would
+# free. Same order and same columns as RESULT_TABLE_COLUMNS.
+PREVIEW_TABLE_CAPTIONS: Tuple[str, ...] = (
+    "Free space now",
+    "Selected categories can free",
+    "Free space after cleanup",
+)
+
 # Compact headers for the same table in the activity log, which is narrower than
 # the window. Same order as RESULT_TABLE_COLUMNS.
 RESULT_TABLE_LOG_HEADERS: Tuple[str, ...] = ("Before", "Freed", "Now free")
+
+# Same, for the projection of the current selection.
+PREVIEW_TABLE_LOG_HEADERS: Tuple[str, ...] = ("Now free", "Can free", "Afterwards")
 
 # Width in characters the activity log can show without wrapping.
 LOG_WIDTH_CHARS = 46
@@ -623,6 +635,59 @@ def cleanup_table_row(result: Dict[str, Any]) -> Dict[str, str]:
         "freed": human_size(result.get("reclaimed_total", 0)),
         "after": human_gb(primary_free_bytes(result.get("disk_after", {}))),
     }
+
+
+def selected_potential_bytes(sizes: Dict[str, int], selection: Dict[str, bool]) -> int:
+    """
+    Sum the measured sizes of all currently selected measurable categories.
+
+    This is the amount a cleanup would free with the current selection.
+
+    :param sizes: Measured size in bytes per category key.
+    :param selection: Mapping of selection name to bool.
+    :return: Total size in bytes.
+    """
+    return sum(
+        sizes.get(key, 0) for key in MEASURABLE_KEYS if selection.get(key)
+    )
+
+
+def projection_table_row(free_bytes: int, potential_bytes: int) -> Dict[str, str]:
+    """
+    Build the table row that projects the effect of the current selection.
+
+    Uses the same columns as cleanup_table_row(), so the table shows the
+    projection and the later real result in the same place.
+
+    :param free_bytes: Free bytes available now.
+    :param potential_bytes: Bytes the current selection would free.
+    :return: Mapping of column key to formatted value.
+    """
+    return {
+        "before": human_gb(free_bytes),
+        "freed": human_size(potential_bytes),
+        "after": human_gb(free_bytes + potential_bytes),
+    }
+
+
+def trash_mode_delays_space(selection: Dict[str, bool], delete_mode: str) -> bool:
+    """
+    Return True when the selection only moves user data to the Trash.
+
+    In that case the projected space is not released on disk before the Trash is
+    emptied. Trash contents themselves are always deleted immediately.
+
+    :param selection: Mapping of selection name to bool.
+    :param delete_mode: "trash" or "delete".
+    :return: True when a hint about the Trash is needed.
+    """
+    if delete_mode != "trash":
+        return False
+    return any(
+        selection.get(key)
+        for key in MEASURABLE_KEYS
+        if key not in ROOT_MEASURABLE_KEYS and key != "trash"
+    )
 
 
 def disk_report_targets() -> List[Tuple[str, str]]:
@@ -1753,8 +1818,10 @@ class MintCleanerApp(tk.Tk):
         mode_combo.set("Move to Trash")
 
         def on_mode_change(event=None):
+            """Apply the chosen deletion mode and refresh the Trash hint."""
             val = mode_combo.get()
             self.delete_mode_var.set("trash" if val == "Move to Trash" else "delete")
+            self._show_projection()
 
         mode_combo.bind("<<ComboboxSelected>>", on_mode_change)
         self._interactive_widgets.append((mode_combo, "readonly"))
@@ -2121,11 +2188,14 @@ class MintCleanerApp(tk.Tk):
         table.pack(fill=tk.X)
 
         self.result_vars: Dict[str, tk.StringVar] = {}
+        self.result_caption_vars: List[tk.StringVar] = []
         for index, (caption, key, color) in enumerate(RESULT_TABLE_COLUMNS):
             table.columnconfigure(index, weight=1, uniform="result")
+            caption_var = tk.StringVar(master=self, value=PREVIEW_TABLE_CAPTIONS[index])
+            self.result_caption_vars.append(caption_var)
             tk.Label(
                 table,
-                text=caption,
+                textvariable=caption_var,
                 bg=TABLE_HEADER_BG,
                 fg=TABLE_HEADER_FG,
                 font=("Segoe UI", 9, "bold"),
@@ -2155,7 +2225,7 @@ class MintCleanerApp(tk.Tk):
 
         self.result_note_var = tk.StringVar(
             master=self,
-            value="No cleanup run yet. After a cleanup these values stay visible until the next run.",
+            value="Collecting sizes, the projection appears as soon as the analysis is done.",
         )
         ttk.Label(
             card,
@@ -2323,9 +2393,10 @@ class MintCleanerApp(tk.Tk):
 
     def on_category_toggle(self) -> None:
         """
-        Refresh summary after a category checkbox click.
+        Refresh summary and projection after a category checkbox click.
         """
         self._update_summary()
+        self._show_projection()
 
     def _category_vars(self) -> List[tk.BooleanVar]:
         """
@@ -2505,11 +2576,13 @@ class MintCleanerApp(tk.Tk):
         self.disk_now = result["disk"]
         self._update_disk_line()
         self._update_summary()
+        self._show_projection()
         log_append(
             self.log,
             f"Sizes refreshed, total measurable: {human_size(sum(sizes.values()))}. "
             f"{format_disk_line(self.disk_now)}",
         )
+        self._log_projection()
 
     def _update_category_labels(self, sizes: Dict[str, int]) -> None:
         """
@@ -2820,12 +2893,77 @@ class MintCleanerApp(tk.Tk):
         self._log_cleanup_success(result)
         log_append(self.log, "Use Refresh Sizes to re-measure all categories.")
 
+    def _set_table_captions(self, captions: Sequence[str]) -> None:
+        """
+        Switch the table headers between projection and result wording.
+
+        :param captions: One caption per column, in table order.
+        """
+        for caption_var, caption in zip(self.result_caption_vars, captions):
+            caption_var.set(caption)
+
+    def _show_projection(self) -> None:
+        """
+        Show what the current selection would free in the disk space table.
+
+        Runs after every analysis and after every selection change, so the table
+        answers "how much space do I have, how much can I free, what is left
+        afterwards" before anything is deleted. A finished cleanup replaces these
+        numbers with the values that were really measured.
+        """
+        if not hasattr(self, "result_vars") or not self.result_vars:
+            return
+
+        free_now = primary_free_bytes(self.disk_now)
+        selection = selection_from_vars(self)
+        potential = selected_potential_bytes(self.sizes_before, selection)
+
+        self._set_table_captions(PREVIEW_TABLE_CAPTIONS)
+        for key, value in projection_table_row(free_now, potential).items():
+            self.result_vars[key].set(value)
+
+        selected_count = sum(1 for value in selection.values() if value)
+        notes = [
+            f"Projection for {selected_count} selected "
+            f"{'category' if selected_count == 1 else 'categories'}",
+            "updates with every change of the selection",
+        ]
+        if trash_mode_delays_space(selection, self.delete_mode_var.get()):
+            notes.append(
+                "in Trash mode the space is released after emptying the Trash"
+            )
+        if self.last_cleanup is not None:
+            notes.append(
+                f"last cleanup freed {human_size(self.last_cleanup['reclaimed_total'])}"
+            )
+        self.result_note_var.set("  ·  ".join(notes))
+
+    def _log_projection(self) -> None:
+        """
+        Write the projection for the current selection as a table into the log.
+        """
+        free_now = primary_free_bytes(self.disk_now)
+        potential = selected_potential_bytes(self.sizes_before, selection_from_vars(self))
+        row = projection_table_row(free_now, potential)
+
+        log_append(self.log, "")
+        log_append(self.log, "CURRENT SELECTION")
+        for line in format_text_table(
+            PREVIEW_TABLE_LOG_HEADERS,
+            [[row[key] for _caption, key, _color in RESULT_TABLE_COLUMNS]],
+        ):
+            log_append(self.log, line)
+        log_append(self.log, "")
+
     def _render_cleanup_result(self, result: Dict[str, Any]) -> None:
         """
         Fill the persistent disk space table with the values of a run.
 
         :param result: Result dict produced by _cleanup_worker().
         """
+        self._set_table_captions(
+            [caption for caption, _key, _color in RESULT_TABLE_COLUMNS]
+        )
         for key, value in cleanup_table_row(result).items():
             self.result_vars[key].set(value)
 

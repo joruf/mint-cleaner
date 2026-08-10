@@ -80,6 +80,56 @@ class ResultTableTests(unittest.TestCase):
 
         self.assertEqual(row, {"before": "0.00 GB", "freed": "0.0 MB", "after": "0.00 GB"})
 
+    def test_selected_potential_bytes_sums_only_selected_categories(self):
+        sizes = {"tmp": 100 * MIB, "user_cache": 200 * MIB, "trash": 50 * MIB}
+        selection = {"tmp": True, "user_cache": True, "trash": False}
+
+        self.assertEqual(MINT_CLEANER.selected_potential_bytes(sizes, selection), 300 * MIB)
+
+    def test_selected_potential_bytes_ignores_unknown_and_unmeasurable_keys(self):
+        sizes = {"tmp": 100 * MIB, "not_a_category": 999 * MIB}
+        selection = {"tmp": True, "not_a_category": True, "old_kernels": True}
+
+        self.assertEqual(MINT_CLEANER.selected_potential_bytes(sizes, selection), 100 * MIB)
+
+    def test_selected_potential_bytes_without_selection(self):
+        self.assertEqual(MINT_CLEANER.selected_potential_bytes({"tmp": 5 * MIB}, {}), 0)
+
+    def test_projection_table_row_adds_potential_to_free_space(self):
+        row = MINT_CLEANER.projection_table_row(10 * GIB, 2 * GIB)
+
+        self.assertEqual(row, {"before": "10.00 GB", "freed": "2.00 GB", "after": "12.00 GB"})
+        self.assertEqual(sorted(row), sorted(MINT_CLEANER.cleanup_table_row({})))
+
+    def test_projection_and_result_tables_share_the_same_columns(self):
+        self.assertEqual(len(MINT_CLEANER.PREVIEW_TABLE_CAPTIONS),
+                         len(MINT_CLEANER.RESULT_TABLE_COLUMNS))
+        self.assertEqual(len(MINT_CLEANER.PREVIEW_TABLE_LOG_HEADERS),
+                         len(MINT_CLEANER.RESULT_TABLE_COLUMNS))
+
+    def test_projection_log_table_fits_the_activity_log_width(self):
+        row = MINT_CLEANER.projection_table_row(1234 * GIB, 12 * GIB)
+        lines = MINT_CLEANER.format_text_table(
+            MINT_CLEANER.PREVIEW_TABLE_LOG_HEADERS,
+            [[row[key] for _caption, key, _color in MINT_CLEANER.RESULT_TABLE_COLUMNS]],
+        )
+
+        self.assertLessEqual(max(len(line) for line in lines), MINT_CLEANER.LOG_WIDTH_CHARS)
+
+    def test_trash_mode_delays_space_only_for_user_space_selections(self):
+        self.assertTrue(
+            MINT_CLEANER.trash_mode_delays_space({"user_cache": True}, "trash")
+        )
+        # Immediate deletion frees the space right away.
+        self.assertFalse(
+            MINT_CLEANER.trash_mode_delays_space({"user_cache": True}, "delete")
+        )
+        # Root paths are removed by the helper, they never go to the Trash.
+        self.assertFalse(MINT_CLEANER.trash_mode_delays_space({"tmp": True}, "trash"))
+        # Trash contents themselves are always deleted immediately.
+        self.assertFalse(MINT_CLEANER.trash_mode_delays_space({"trash": True}, "trash"))
+        self.assertFalse(MINT_CLEANER.trash_mode_delays_space({}, "trash"))
+
     def test_format_text_table_aligns_columns(self):
         lines = MINT_CLEANER.format_text_table(
             ["Free space before cleanup", "Space freed", "Free space available now"],

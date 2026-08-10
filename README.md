@@ -15,10 +15,14 @@ Uses a single `pkexec` authentication at startup – no repeated password prompt
 - **User deletion mode** – choose **Move to Trash** (default) or **Delete immediately**.
 - **Background cleanup** – the cleanup runs with the same progress checklist
   (measure → delete → measure → read disk usage).
-- **Persistent result table** – after a cleanup the table at the bottom shows,
-  left to right: free space before the cleanup, the space that was freed, and the
-  free space available now. The same table is written into the activity log. The
-  values stay visible until the next run.
+- **Projection before cleaning** – right after the startup analysis the table at
+  the bottom shows, left to right: the free space you have now, how much the
+  currently ticked categories would free, and how much free space would be
+  available afterwards. It updates with every change of the selection.
+- **Persistent result table** – after a cleanup the very same table switches to
+  the measured values: free space before the cleanup, the space that was freed,
+  and the free space available now. Both tables are also written into the
+  activity log, and the result stays visible until the next run.
 - **Taskbar icon** – window and panel icon, generated as PNG without any image
   library (see `ui/window_icon.py`), plus `StartupWMClass` so the panel matches the launcher.
 - **Modern UI** – grouped categories (System / User) in scrollable tabs and a detailed log area.
