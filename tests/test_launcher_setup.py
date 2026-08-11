@@ -70,6 +70,22 @@ class DesktopEntryTests(unittest.TestCase):
             self.assertIn("run.py", path.read_text(encoding="utf-8"))
 
 
+class DesktopShortcutToggleTests(unittest.TestCase):
+    def test_install_query_and_remove_roundtrip(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            desktop_dir = Path(tmp_dir) / "Desktop"
+            with mock.patch.object(desktop_setup, "user_desktop_dir", return_value=desktop_dir):
+                self.assertFalse(desktop_setup.desktop_shortcut_installed())
+
+                self.assertTrue(desktop_setup.install_desktop_shortcut()[0])
+                self.assertTrue(desktop_setup.desktop_shortcut_installed())
+
+                self.assertTrue(desktop_setup.remove_desktop_shortcut())
+                self.assertFalse(desktop_setup.desktop_shortcut_installed())
+                # Removing again is not an error.
+                self.assertTrue(desktop_setup.remove_desktop_shortcut())
+
+
 class NemoActionTests(unittest.TestCase):
     def test_nemo_action_points_to_run_py(self):
         content = nemo_setup.build_nemo_action_content()
@@ -111,6 +127,30 @@ class NemoActionTests(unittest.TestCase):
             action = actions_dir / nemo_setup.ACTION_FILENAME
             self.assertTrue(action.is_file())
             self.assertIn("run.py", action.read_text(encoding="utf-8"))
+
+
+class NemoActionToggleTests(unittest.TestCase):
+    def test_install_query_and_remove_roundtrip(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            actions_dir = Path(tmp_dir) / "nemo" / "actions"
+            with mock.patch.object(nemo_setup, "NEMO_ACTIONS_DIR", actions_dir):
+                self.assertFalse(nemo_setup.nemo_action_installed())
+
+                self.assertTrue(nemo_setup.install_nemo_action())
+                self.assertTrue(nemo_setup.nemo_action_installed())
+                self.assertEqual(nemo_setup.nemo_action_path().parent, actions_dir)
+
+                self.assertTrue(nemo_setup.remove_nemo_action())
+                self.assertFalse(nemo_setup.nemo_action_installed())
+                # Removing again is not an error.
+                self.assertTrue(nemo_setup.remove_nemo_action())
+
+
+class NoFirstRunPromptTests(unittest.TestCase):
+    def test_first_run_prompts_are_gone(self):
+        """The menu checkboxes are the only place that controls the integration."""
+        self.assertFalse(hasattr(nemo_setup, "maybe_prompt_nemo_setup"))
+        self.assertFalse(hasattr(desktop_setup, "maybe_prompt_desktop_setup"))
 
 
 if __name__ == "__main__":

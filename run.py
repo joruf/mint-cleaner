@@ -82,11 +82,21 @@ if __name__ == "__main__" and "--helper" not in sys.argv:
     ensure_runtime_dependencies()
 
 import tkinter as tk
-from tkinter import ttk
+from tkinter import messagebox, ttk
 from tkinter.scrolledtext import ScrolledText
 
-from ui.desktop_setup import maybe_prompt_desktop_setup, refresh_desktop_shortcut
-from ui.nemo_setup import maybe_prompt_nemo_setup, refresh_nemo_action
+from ui.desktop_setup import (
+    desktop_shortcut_installed,
+    install_desktop_shortcut,
+    refresh_desktop_shortcut,
+    remove_desktop_shortcut,
+)
+from ui.nemo_setup import (
+    install_nemo_action,
+    nemo_action_installed,
+    refresh_nemo_action,
+    remove_nemo_action,
+)
 from ui.progress_dialog import ProgressDialog
 from ui.window_icon import WM_CLASS_NAME, apply_window_icon, glyph_photo_image
 from datetime import datetime
@@ -168,6 +178,12 @@ PREVIEW_TABLE_LOG_HEADERS: Tuple[str, ...] = ("Now free", "Can free", "Afterward
 
 # Width in characters the activity log can show without wrapping.
 LOG_WIDTH_CHARS = 46
+
+# Labels of the two user deletion modes, shown in the combobox and the menu.
+DELETE_MODE_LABELS: Dict[str, str] = {
+    "delete": "Delete immediately",
+    "trash": "Move to Trash",
+}
 
 # Colors of the highlighted main action button ("Clean Selected").
 PRIMARY_BUTTON_BG = "#1e7f3b"
@@ -637,13 +653,21 @@ def cleanup_table_row(result: Dict[str, Any]) -> Dict[str, str]:
     """
     Build the cleanup result table row from a finished cleanup run.
 
+    The middle column is the real change of the free disk space, so the row adds
+    up: free space before plus freed equals free space now. The deleted data
+    volume can differ from it, for example when files were moved to the Trash or
+    when a process still holds deleted files open, and is reported separately.
+
     :param result: Result dict produced by the cleanup worker.
     :return: Mapping of column key to formatted value.
     """
+    free_before = primary_free_bytes(result.get("disk_before", {}))
+    free_after = primary_free_bytes(result.get("disk_after", {}))
+    gained = free_after - free_before
     return {
-        "before": human_gb(primary_free_bytes(result.get("disk_before", {}))),
-        "freed": human_size(result.get("reclaimed_total", 0)),
-        "after": human_gb(primary_free_bytes(result.get("disk_after", {}))),
+        "before": human_gb(free_before),
+        "freed": human_size(gained) if gained >= 0 else human_delta(gained),
+        "after": human_gb(free_after),
     }
 
 
@@ -1657,8 +1681,9 @@ class MintCleanerApp(tk.Tk):
 
         self.username = getpass.getuser()
 
-        # Deletion mode for user scoped actions
-        self.delete_mode_var = tk.StringVar(master=self, value="trash")  # "trash" or "delete"
+        # Deletion mode for user scoped actions. Deleting right away is the
+        # default, moving to Trash only relocates the data and frees no space.
+        self.delete_mode_var = tk.StringVar(master=self, value="delete")  # "trash" or "delete"
 
         # Checkboxes state
         self.var_tmp = tk.BooleanVar(master=self, value=False)                 # /tmp and /var/tmp
@@ -1766,7 +1791,6 @@ class MintCleanerApp(tk.Tk):
 
         style.configure("TLabel", font=("Segoe UI", 10))
         style.configure("Title.TLabel", font=("Segoe UI", 18, "bold"))
-        style.configure("Subtitle.TLabel", font=("Segoe UI", 10))
         style.configure("CardTitle.TLabel", font=("Segoe UI", 11, "bold"))
         style.configure("Hint.TLabel", font=("Segoe UI", 9))
         style.configure("TLabelframe", font=("Segoe UI", 10, "bold"))
@@ -1825,25 +1849,66 @@ class MintCleanerApp(tk.Tk):
         # Secondary actions stay quiet, they only support the main action.
         style.configure("Secondary.TButton", font=("Segoe UI", 9), padding=(10, 6))
 
+    def _build_menubar(self) -> None:
+        """
+        Build the menu bar with File, Integration and Help.
+
+        The actions that are not the main action live here, together with the
+        desktop integration switches. Entries that must not run while a
+        background job is active are collected in self._job_menu_entries.
+        """
+        menubar = tk.Menu(self, tearoff=False)
+
+        file_menu = tk.Menu(menubar, tearoff=False)
+        file_menu.add_command(label="Clean Selected", command=self.on_clean_clicked)
+        file_menu.add_command(label="Preview Commands", command=self.on_preview)
+        file_menu.add_command(label="Refresh Sizes", command=self.refresh_sizes)
+        file_menu.add_separator()
+        file_menu.add_command(label="Quit", command=self.on_quit)
+        menubar.add_cascade(label="File", menu=file_menu)
+        # Everything above the separator touches the analysis or the cleanup.
+        self._job_menu_entries = [(file_menu, index) for index in range(3)]
+
+        integration_menu = tk.Menu(menubar, tearoff=False)
+        self.nemo_action_var = tk.BooleanVar(master=self, value=nemo_action_installed())
+        integration_menu.add_checkbutton(
+            label="Nemo context menu entry",
+            variable=self.nemo_action_var,
+            command=self.on_toggle_nemo_action,
+        )
+        self.desktop_shortcut_var = tk.BooleanVar(
+            master=self, value=desktop_shortcut_installed()
+        )
+        integration_menu.add_checkbutton(
+            label="Desktop shortcut",
+            variable=self.desktop_shortcut_var,
+            command=self.on_toggle_desktop_shortcut,
+        )
+        menubar.add_cascade(label="Integration", menu=integration_menu)
+
+        help_menu = tk.Menu(menubar, tearoff=False)
+        help_menu.add_command(label="About", command=self.on_about)
+        help_menu.add_command(label="Developer", command=self.on_developer)
+        menubar.add_cascade(label="Help", menu=help_menu)
+
+        self.configure(menu=menubar)
+        self.menubar = menubar
+
     def _build_ui(self) -> None:
         """
         Build a redesigned, user-friendly interface with clear grouping and flow.
         """
+        self._build_menubar()
+
         main_container = ttk.Frame(self, padding=14)
         main_container.pack(fill=tk.BOTH, expand=True)
 
         header_frame = ttk.Frame(main_container, padding=(2, 2, 2, 10))
         header_frame.pack(fill=tk.X)
 
+        # Sizes live at the checkboxes, free space in the table at the bottom,
+        # so the header only carries the application name.
         ttk.Label(header_frame, text="Mint Cleaner", style="Title.TLabel").pack(anchor="w")
-        ttk.Label(
-            header_frame,
-            text="Clean temporary files and caches safely with one-click actions.",
-            style="Subtitle.TLabel",
-        ).pack(anchor="w", pady=(2, 0))
-
-        self.summary_var = tk.StringVar(value="No data loaded yet.")
-        ttk.Label(header_frame, textvariable=self.summary_var, style="Hint.TLabel").pack(anchor="w", pady=(6, 0))
 
         action_bar = ttk.Frame(main_container, padding=(0, 0, 0, 8))
         action_bar.pack(fill=tk.X)
@@ -1854,17 +1919,21 @@ class MintCleanerApp(tk.Tk):
         mode_combo = ttk.Combobox(
             mode_frame,
             state="readonly",
-            values=["Move to Trash", "Delete immediately"],
+            values=[DELETE_MODE_LABELS["delete"], DELETE_MODE_LABELS["trash"]],
             width=18,
         )
         mode_combo.pack(side=tk.LEFT)
-        mode_combo.set("Move to Trash")
+        mode_combo.set(DELETE_MODE_LABELS[self.delete_mode_var.get()])
+        self.mode_combo = mode_combo
 
         def on_mode_change(event=None):
-            """Apply the chosen deletion mode and refresh the Trash hint."""
-            val = mode_combo.get()
-            self.delete_mode_var.set("trash" if val == "Move to Trash" else "delete")
-            self._show_projection()
+            """Apply the deletion mode chosen in the combobox."""
+            chosen = mode_combo.get()
+            for key, label in DELETE_MODE_LABELS.items():
+                if label == chosen:
+                    self.delete_mode_var.set(key)
+                    break
+            self.on_delete_mode_changed()
 
         mode_combo.bind("<<ComboboxSelected>>", on_mode_change)
         self._interactive_widgets.append((mode_combo, "readonly"))
@@ -2109,7 +2178,12 @@ class MintCleanerApp(tk.Tk):
 
         right_actions = ttk.LabelFrame(right_panel, text="Actions", padding=10)
         right_actions.pack(fill=tk.X, pady=(0, 10))
-        ttk.Label(right_actions, text="1) Select categories  2) Preview  3) Clean", style="Hint.TLabel").pack(anchor="w", pady=(0, 8))
+        ttk.Label(
+            right_actions,
+            text="Select categories, then clean.\nPreview and Refresh Sizes: File menu.",
+            style="Hint.TLabel",
+            justify=tk.LEFT,
+        ).pack(anchor="w", pady=(0, 8))
 
         self.clean_button = ttk.Button(
             right_actions,
@@ -2126,24 +2200,8 @@ class MintCleanerApp(tk.Tk):
             self.clean_button.configure(
                 image=self.clean_button_glyph, compound=tk.LEFT, padding=(12, 10)
             )
-        self.clean_button.pack(fill=tk.X, pady=(0, 12))
-
-        self.preview_button = ttk.Button(
-            right_actions,
-            text="Preview Commands",
-            style="Secondary.TButton",
-            command=self.on_preview,
-        )
-        self.preview_button.pack(fill=tk.X, pady=(0, 6))
-        self.refresh_button = ttk.Button(
-            right_actions,
-            text="Refresh Sizes",
-            style="Secondary.TButton",
-            command=self.refresh_sizes,
-        )
-        self.refresh_button.pack(fill=tk.X)
-        for button in (self.clean_button, self.preview_button, self.refresh_button):
-            self._interactive_widgets.append((button, "normal"))
+        self.clean_button.pack(fill=tk.X)
+        self._interactive_widgets.append((self.clean_button, "normal"))
 
         log_card = ttk.LabelFrame(right_panel, text="Activity Log", padding=10)
         log_card.pack(fill=tk.BOTH, expand=True)
@@ -2308,6 +2366,93 @@ class MintCleanerApp(tk.Tk):
                 widget.configure(state=normal_state if enabled else "disabled")
             except tk.TclError:
                 pass
+        for menu, index in getattr(self, "_job_menu_entries", []):
+            try:
+                menu.entryconfigure(index, state=tk.NORMAL if enabled else tk.DISABLED)
+            except tk.TclError:
+                pass
+
+    # ----------------------------- Menu actions -----------------------------
+
+    def on_delete_mode_changed(self) -> None:
+        """
+        Show the current deletion mode in the combobox and refresh the projection.
+        """
+        try:
+            self.mode_combo.set(DELETE_MODE_LABELS[self.delete_mode_var.get()])
+        except (AttributeError, tk.TclError, KeyError):
+            pass
+        self._show_projection()
+
+    def on_toggle_nemo_action(self) -> None:
+        """
+        Add or remove the Nemo context menu entry from the menu checkbox.
+        """
+        wanted = bool(self.nemo_action_var.get())
+        succeeded = install_nemo_action() if wanted else remove_nemo_action()
+        if not succeeded:
+            # Show what is really on disk, not what was clicked.
+            self.nemo_action_var.set(nemo_action_installed())
+            log_append(self.log, "[ERR] Could not change the Nemo context menu entry.")
+            return
+        log_append(
+            self.log,
+            "[OK] Nemo context menu entry added."
+            if wanted
+            else "[OK] Nemo context menu entry removed.",
+        )
+
+    def on_toggle_desktop_shortcut(self) -> None:
+        """
+        Create or delete the desktop shortcut from the menu checkbox.
+        """
+        wanted = bool(self.desktop_shortcut_var.get())
+        if wanted:
+            succeeded, _path = install_desktop_shortcut()
+        else:
+            succeeded = remove_desktop_shortcut()
+        if not succeeded:
+            self.desktop_shortcut_var.set(desktop_shortcut_installed())
+            log_append(self.log, "[ERR] Could not change the desktop shortcut.")
+            return
+        log_append(
+            self.log,
+            "[OK] Desktop shortcut created." if wanted else "[OK] Desktop shortcut removed.",
+        )
+
+    def on_about(self) -> None:
+        """
+        Show the About dialog.
+        """
+        messagebox.showinfo(
+            "About Mint Cleaner",
+            "Mint Cleaner\n\n"
+            "Clean temporary files, caches and system leftovers on Linux Mint "
+            "with a single authentication and a clear disk space report.",
+            parent=self,
+        )
+
+    def on_developer(self) -> None:
+        """
+        Show the developer information.
+        """
+        messagebox.showinfo(
+            "Developer",
+            "Joachim Ruf\n"
+            "Loresoft\n\n"
+            "GitHub: https://github.com/joruf\n"
+            "Web: https://www.loresoft.de/",
+            parent=self,
+        )
+
+    def on_quit(self) -> None:
+        """
+        Close the application, but never in the middle of a running job.
+        """
+        if self._job_active:
+            log_append(self.log, "[INFO] An operation is still running, please wait.")
+            return
+        self.destroy()
 
     # ----------------------------- Background jobs -----------------------------
 
@@ -2455,43 +2600,9 @@ class MintCleanerApp(tk.Tk):
 
     def on_category_toggle(self) -> None:
         """
-        Refresh summary and projection after a category checkbox click.
+        Refresh the projection after a category checkbox click.
         """
-        self._update_summary()
         self._show_projection()
-
-    def _category_vars(self) -> List[tk.BooleanVar]:
-        """
-        Return all category selection variables.
-        """
-        return [
-            self.var_tmp, self.var_user_cache, self.var_thumbnails, self.var_trash,
-            self.var_firefox, self.var_chrome, self.var_config_app_caches,
-            self.var_dev_tool_caches, self.var_user_lang_tool_caches,
-            self.var_python_artifacts, self.var_local_history,
-            self.var_flatpak_user, self.var_flatpak_repair_user,
-            self.var_flatpak_syscache, self.var_flatpak_repair_system, self.var_apt,
-            self.var_journal, self.var_flatpak_app_cache, self.var_apt_cache,
-            self.var_system_misc_caches, self.var_system_extra_caches, self.var_old_kernels,
-        ]
-
-    def _update_summary(self) -> None:
-        """
-        Update top summary line with selected categories and measurable cache size.
-        """
-        if not hasattr(self, "summary_var"):
-            return
-
-        selected_count = sum(1 for var in self._category_vars() if var.get())
-
-        measurable_total = sum(self.sizes_before.values()) if self.sizes_before else 0
-        summary = (
-            f"Selected categories: {selected_count} | "
-            f"Measurable cache footprint: {human_size(measurable_total)}"
-        )
-        if self.disk_now:
-            summary += f" | Free space now: {human_gb(primary_free_bytes(self.disk_now))}"
-        self.summary_var.set(summary)
 
     def _apply_autoselect_by_threshold(self, sizes_now: Dict[str, int]) -> None:
         """
@@ -2637,7 +2748,6 @@ class MintCleanerApp(tk.Tk):
         self.sizes_before = sizes
         self.disk_now = result["disk"]
         self._update_disk_line()
-        self._update_summary()
         self._show_projection()
         log_append(
             self.log,
@@ -2817,12 +2927,14 @@ class MintCleanerApp(tk.Tk):
             sizes_before[key] = self._measure_key(key, patterns)
             reporter.end(human_size(sizes_before[key]))
 
-        # Announce the remaining work now that the plan is known.
+        # Announce the remaining work now that the plan is known. Immediate
+        # deletions run first: emptying the Trash must not wipe out the files
+        # that are moved into it in the same run.
         remaining: List[str] = []
-        if to_trash:
-            remaining.append(f"Move {len(to_trash)} user path patterns to Trash")
         if to_delete_user:
             remaining.append(f"Delete {len(to_delete_user)} user path patterns")
+        if to_trash:
+            remaining.append(f"Move {len(to_trash)} user path patterns to Trash")
         remaining += [f"Run: {cmd}" for cmd in plan["user_cmds"]]
         if plan["root_rm_patterns"]:
             remaining.append(
@@ -2837,15 +2949,6 @@ class MintCleanerApp(tk.Tk):
         if plan_is_empty(plan):
             reporter.log("[INFO] Nothing to delete, the selected categories are empty.")
 
-        if to_trash:
-            reporter.begin(f"Move {len(to_trash)} user path patterns to Trash")
-            reporter.log("[User] Moving selected paths to Trash ...")
-            moved, log_text = trash_paths(to_trash)
-            if log_text.strip():
-                reporter.log(log_text)
-            reporter.log(f"[User] Trashed entries: {moved}")
-            reporter.end(f"{moved} entries")
-
         if to_delete_user:
             reporter.begin(f"Delete {len(to_delete_user)} user path patterns")
             reporter.log("[User] Deleting selected paths ...")
@@ -2854,6 +2957,15 @@ class MintCleanerApp(tk.Tk):
                 reporter.log(log_text)
             reporter.log(f"[User] Removed entries: {removed}")
             reporter.end(f"{removed} entries")
+
+        if to_trash:
+            reporter.begin(f"Move {len(to_trash)} user path patterns to Trash")
+            reporter.log("[User] Moving selected paths to Trash ...")
+            moved, log_text = trash_paths(to_trash)
+            if log_text.strip():
+                reporter.log(log_text)
+            reporter.log(f"[User] Trashed entries: {moved}")
+            reporter.end(f"{moved} entries")
 
         for cmd in plan["user_cmds"]:
             reporter.begin(f"Run: {cmd}")
@@ -2950,7 +3062,6 @@ class MintCleanerApp(tk.Tk):
         self._apply_autodeselect_zero_or_unknown(result["sizes_after"])
         self._update_category_labels(result["sizes_after"])
         self._update_disk_line()
-        self._update_summary()
         self._render_cleanup_result(result)
         self._log_cleanup_success(result)
         log_append(self.log, "Use Refresh Sizes to re-measure all categories.")
@@ -3029,12 +3140,10 @@ class MintCleanerApp(tk.Tk):
         for key, value in cleanup_table_row(result).items():
             self.result_vars[key].set(value)
 
-        free_before = primary_free_bytes(result["disk_before"])
-        free_after = primary_free_bytes(result["disk_after"])
         notes = [
             f"Last cleanup at {datetime.now().strftime('%H:%M:%S')}",
             f"{len(result['selected_keys'])} categories processed",
-            f"change on disk {human_delta(free_after - free_before)}",
+            f"deleted {human_size(result['reclaimed_total'])} of data",
         ]
         if result.get("trash_used"):
             notes.append(
@@ -3061,14 +3170,19 @@ class MintCleanerApp(tk.Tk):
             [[row[key] for _caption, key, _color in RESULT_TABLE_COLUMNS]],
         ):
             log_append(self.log, line)
-        log_append(self.log, f"Change on disk: {human_delta(free_after - free_before)}")
+        log_append(self.log, f"Deleted data: {human_size(reclaimed)}")
         log_append(
             self.log,
             f"Processed measurable categories: {len(result['selected_keys'])}",
         )
-        if reclaimed <= 0:
-            log_append(self.log, "No measurable space was reclaimed.")
-        elif reclaimed >= 500 * 1024 * 1024:
+        if reclaimed > 0 and free_after <= free_before:
+            log_append(
+                self.log,
+                "Data was deleted, but the free space did not grow. Files moved to "
+                "the Trash still occupy space, and deleted files that a process "
+                "still holds open are released later.",
+            )
+        if reclaimed >= 500 * 1024 * 1024:
             log_append(self.log, "Trophy unlocked: Great cleanup!")
         log_append(self.log, "")
 
@@ -3219,13 +3333,8 @@ if __name__ == "__main__":
     if "--helper" in sys.argv:
         helper_main()
     else:
-        _root = tk.Tk(className=WM_CLASS_NAME)
-        _root.withdraw()
-        apply_window_icon(_root)
-        maybe_prompt_nemo_setup(_root)
-        maybe_prompt_desktop_setup(_root)
-        _root.destroy()
-        # Keep launchers of older versions pointing at run.py.
+        # Keep launchers of older versions pointing at run.py. Whether they
+        # exist at all is controlled by the checkboxes in the Integration menu.
         refresh_desktop_shortcut()
         refresh_nemo_action()
         # Fix incomplete user hicolor overlays that hide Nemo toolbar icons.

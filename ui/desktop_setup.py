@@ -2,27 +2,22 @@
 # -*- coding: utf-8 -*-
 
 """
-First-run setup for desktop shortcut creation.
+Desktop shortcut creation.
 
-On the first application start the user is asked once whether a desktop
-shortcut should be created on Desktop or its localized equivalent. The shared
-.initialized marker file in the project directory prevents repeated prompts.
-A shortcut created by an older version is refreshed on every start so it keeps
-pointing at run.py and uses the generated application icon.
+The shortcut on the user's desktop is switched on and off by the checkbox in the
+Integration menu, so there is exactly one place that controls it. A shortcut
+created by an older version is refreshed on every start so it keeps pointing at
+run.py and uses the generated application icon.
 """
 
 import stat
 from pathlib import Path
 
-from tkinter import messagebox
-
 from paths import (
     DESKTOP_FILENAME,
     DESKTOP_TEMPLATE,
-    INIT_FILE,
     MAIN_SCRIPT,
 )
-from ui.nemo_setup import mark_initialization_done
 from ui.window_icon import WM_CLASS_PUBLISHED, desktop_icon_value
 
 MINT_CLEANER_SCRIPT = MAIN_SCRIPT
@@ -155,28 +150,35 @@ def refresh_desktop_shortcut() -> bool:
         return False
 
 
-def maybe_prompt_desktop_setup(parent=None) -> None:
+def desktop_shortcut_path() -> Path:
     """
-    Ask once on first run whether to create a desktop shortcut.
+    Return the path of the desktop shortcut.
 
-    @param parent Optional Tk parent window for message boxes
+    @return Path Shortcut location on the user's desktop
     """
-    if INIT_FILE.exists():
-        return
+    return user_desktop_dir() / DESKTOP_FILENAME
 
-    answer = messagebox.askyesno(
-        "Desktop Shortcut",
-        "Would you like to create a desktop shortcut for Mint Cleaner?",
-        parent=parent,
-    )
 
-    if answer:
-        success, _ = install_desktop_shortcut()
-        if not success:
-            messagebox.showerror(
-                "Desktop Shortcut",
-                "Could not create the desktop shortcut.",
-                parent=parent,
-            )
+def desktop_shortcut_installed() -> bool:
+    """
+    Return True when the desktop shortcut currently exists.
 
-    mark_initialization_done()
+    @return bool Installation state
+    """
+    return desktop_shortcut_path().is_file()
+
+
+def remove_desktop_shortcut() -> bool:
+    """
+    Remove the desktop shortcut again.
+
+    @return bool True when no shortcut is left behind
+    """
+    shortcut_path = desktop_shortcut_path()
+    if not shortcut_path.exists():
+        return True
+    try:
+        shortcut_path.unlink()
+        return True
+    except OSError:
+        return False

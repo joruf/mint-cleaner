@@ -2,20 +2,18 @@
 # -*- coding: utf-8 -*-
 
 """
-First-run setup for Nemo context menu integration.
+Nemo context menu integration.
 
-On the first application start the user is asked once whether a Nemo action
-should be installed under ~/.local/share/nemo/actions/. The shared .initialized
-marker file in the project directory prevents repeated prompts. An action that
+The action lives in ~/.local/share/nemo/actions/ and adds a Mint Cleaner entry
+to the Nemo context menu. It is switched on and off by the checkbox in the
+Integration menu, so there is exactly one place that controls it. An action that
 was installed by an older version is refreshed on every start so it keeps
 pointing at run.py.
 """
 
 from pathlib import Path
 
-from tkinter import messagebox
-
-from paths import INIT_FILE, MAIN_SCRIPT
+from paths import MAIN_SCRIPT
 from ui.window_icon import desktop_icon_value
 
 NEMO_ACTIONS_DIR = Path.home() / ".local" / "share" / "nemo" / "actions"
@@ -43,6 +41,24 @@ def build_nemo_action_content() -> str:
     )
 
 
+def nemo_action_path() -> Path:
+    """
+    Return the path of the Nemo action file.
+
+    @return Path Action file location
+    """
+    return NEMO_ACTIONS_DIR / ACTION_FILENAME
+
+
+def nemo_action_installed() -> bool:
+    """
+    Return True when the Nemo context menu entry is currently installed.
+
+    @return bool Installation state
+    """
+    return nemo_action_path().is_file()
+
+
 def install_nemo_action() -> bool:
     """
     Install the Nemo action file in the user's actions directory.
@@ -51,8 +67,23 @@ def install_nemo_action() -> bool:
     """
     try:
         NEMO_ACTIONS_DIR.mkdir(parents=True, exist_ok=True)
-        action_path = NEMO_ACTIONS_DIR / ACTION_FILENAME
-        action_path.write_text(build_nemo_action_content(), encoding="utf-8")
+        nemo_action_path().write_text(build_nemo_action_content(), encoding="utf-8")
+        return True
+    except OSError:
+        return False
+
+
+def remove_nemo_action() -> bool:
+    """
+    Remove the Nemo context menu entry again.
+
+    @return bool True when no action file is left behind
+    """
+    action_path = nemo_action_path()
+    if not action_path.exists():
+        return True
+    try:
+        action_path.unlink()
         return True
     except OSError:
         return False
@@ -67,7 +98,7 @@ def refresh_nemo_action() -> bool:
 
     @return bool True when the action file was rewritten
     """
-    action_path = NEMO_ACTIONS_DIR / ACTION_FILENAME
+    action_path = nemo_action_path()
     if not action_path.is_file():
         return False
 
@@ -79,36 +110,3 @@ def refresh_nemo_action() -> bool:
         return True
     except OSError:
         return False
-
-
-def mark_initialization_done() -> None:
-    """Create the marker file so the first-run prompt is not shown again."""
-    try:
-        INIT_FILE.touch()
-    except OSError:
-        pass
-
-
-def maybe_prompt_nemo_setup(parent=None) -> None:
-    """
-    Ask once on first run whether to add a Nemo context menu entry.
-
-    @param parent Optional Tk parent window for message boxes
-    """
-    if INIT_FILE.exists():
-        return
-
-    answer = messagebox.askyesno(
-        "Nemo Context Menu",
-        "Would you like to add a Mint Cleaner entry to the Nemo context menu "
-        "(trash and file system)?",
-        parent=parent,
-    )
-
-    if answer:
-        if not install_nemo_action():
-            messagebox.showerror(
-                "Nemo Context Menu",
-                "Could not create the Nemo context menu entry.",
-                parent=parent,
-            )

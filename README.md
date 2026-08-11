@@ -12,7 +12,9 @@ Uses a single `pkexec` authentication at startup – no repeated password prompt
 - **Live size analysis** – shows the current MB/GB usage of all measurable categories.
 - **Auto‑select by threshold** – automatically ticks items larger than 100 MB (configurable).
 - **Auto‑deselect** – untick items that are 0 MB or have unknown size.
-- **User deletion mode** – choose **Move to Trash** (default) or **Delete immediately**.
+- **User deletion mode** – **Delete immediately** (default) or **Move to Trash**;
+  selectable in the window header. Trash contents are always
+  emptied before new files are moved in, so moving to Trash really keeps them.
 - **Background cleanup** – the cleanup runs with the same progress checklist
   (measure → delete → measure → read disk usage).
 - **Projection before cleaning** – right after the startup analysis the table at
@@ -20,9 +22,11 @@ Uses a single `pkexec` authentication at startup – no repeated password prompt
   currently ticked categories would free, and how much free space would be
   available afterwards. It updates with every change of the selection.
 - **Persistent result table** – after a cleanup the very same table switches to
-  the measured values: free space before the cleanup, the space that was freed,
-  and the free space available now. Both tables are also written into the
-  activity log, and the result stays visible until the next run.
+  the measured values: free space before the cleanup, the space that was really
+  freed on disk, and the free space available now. The row adds up, and the
+  deleted data volume is reported next to it — the two differ when files went to
+  the Trash or a process still holds deleted files open. Both tables are also
+  written into the activity log, and the result stays visible until the next run.
 - **Taskbar icon** – window and panel icon, generated as PNG without any image
   library (see `ui/window_icon.py`), plus `StartupWMClass` so the panel matches the launcher.
 - **Modern UI** – grouped categories (System / User) in scrollable tabs and a detailed log area.
@@ -106,10 +110,24 @@ cd mint-cleaner
 python3 run.py
 ```
 
-`run.py` is the entry point. On the first start Mint Cleaner offers to create a
-desktop shortcut and a Nemo context menu entry; launchers created by older
-versions are updated automatically. The application icons are rendered once into
-`resources/` (or `~/.cache/mint-cleaner/` when the program directory is read-only).
+`run.py` is the entry point. The **Integration** menu switches the desktop
+shortcut and the Nemo context menu entry on and off — ticking writes the entry,
+unticking removes it again. Launchers created by older versions are updated
+automatically. The application icons are rendered once into `resources/` (or
+`~/.cache/mint-cleaner/` when the program directory is read-only).
+
+### Menu
+
+```
+File                    Integration                  Help
+  Clean Selected          [ ] Nemo context menu        About
+  Preview Commands        [ ] Desktop shortcut         Developer
+  Refresh Sizes
+  ----------------
+  Quit
+```
+
+The user deletion mode is set directly in the window header, not in the menu.
 
 ## Project structure
 

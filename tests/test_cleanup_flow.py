@@ -75,6 +75,30 @@ class ResultTableTests(unittest.TestCase):
             ["before", "freed", "after"],
         )
 
+    def test_cleanup_table_row_uses_the_real_disk_difference(self):
+        # Deleted volume and disk difference disagree, for example because files
+        # went to the Trash. The table must still add up.
+        result = {
+            "disk_before": {"System (/)": (int(3.91 * GIB), 100 * GIB)},
+            "disk_after": {"System (/)": (int(9.76 * GIB), 100 * GIB)},
+            "reclaimed_total": int(7.86 * GIB),
+        }
+
+        row = MINT_CLEANER.cleanup_table_row(result)
+
+        self.assertEqual(row["before"], "3.91 GB")
+        self.assertEqual(row["freed"], "5.85 GB")
+        self.assertEqual(row["after"], "9.76 GB")
+
+    def test_cleanup_table_row_reports_a_shrinking_disk_with_a_sign(self):
+        result = {
+            "disk_before": {"System (/)": (10 * GIB, 100 * GIB)},
+            "disk_after": {"System (/)": (10 * GIB - 40 * MIB, 100 * GIB)},
+            "reclaimed_total": 500 * MIB,
+        }
+
+        self.assertEqual(MINT_CLEANER.cleanup_table_row(result)["freed"], "-40.0 MB")
+
     def test_cleanup_table_row_tolerates_missing_values(self):
         row = MINT_CLEANER.cleanup_table_row({})
 
@@ -335,6 +359,42 @@ class CleanupWorkerTests(unittest.TestCase):
             trashed = os.listdir(os.path.join(tmp_home, ".local/share/Trash/files"))
             self.assertEqual(sorted(trashed), ["a.png", "b.png"])
             self.assertEqual(result["reclaimed_total"], 2 * 4096)
+
+    def test_cleanup_worker_empties_the_trash_before_filling_it(self):
+        """Regression: emptying the Trash must not wipe the files just moved in."""
+        with tempfile.TemporaryDirectory() as tmp_home:
+            thumbnails = os.path.join(tmp_home, ".thumbnails")
+            trash_files = os.path.join(tmp_home, ".local/share/Trash/files")
+            os.makedirs(thumbnails)
+            os.makedirs(trash_files)
+            with open(os.path.join(thumbnails, "pic.png"), "wb") as handle:
+                handle.write(b"x" * 4096)
+            with open(os.path.join(trash_files, "old.txt"), "wb") as handle:
+                handle.write(b"y" * 2048)
+
+            selection = {name: False for name in MINT_CLEANER.SELECTION_NAMES}
+            selection["thumbnails"] = True
+            selection["trash"] = True
+            context = {
+                "selection": selection,
+                "selected_keys": ["thumbnails", "trash"],
+                "patterns": {
+                    "thumbnails": ["~/.thumbnails/*"],
+                    "trash": ["~/.local/share/Trash/*"],
+                },
+                "retention": "3d",
+                "mode": "trash",
+            }
+
+            updates: queue.Queue = queue.Queue()
+            with mock.patch.dict(os.environ, {"HOME": tmp_home}, clear=False):
+                with mock.patch.object(MINT_CLEANER, "exists_in_path", return_value=False):
+                    result = _FakeApp()._cleanup_worker(MINT_CLEANER.JobReporter(updates), context)
+
+            self.assertEqual(os.listdir(thumbnails), [])
+            # The thumbnail survived in the Trash, the old content is gone.
+            self.assertEqual(os.listdir(trash_files), ["pic.png"])
+            self.assertTrue(result["trash_used"])
 
     def test_cleanup_worker_step_labels_match_begin_order(self):
         with tempfile.TemporaryDirectory() as tmp_home:
