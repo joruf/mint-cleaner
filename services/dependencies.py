@@ -210,40 +210,33 @@ def install_dependencies(deps: List[Dependency]) -> tuple[bool, str]:
 
 def ensure_runtime_dependencies() -> None:
     """
-    Verify required dependencies and offer to install any that are missing.
+    Verify every dependency and install what is missing, showing the work in a window.
 
-    Exits the process with status 1 when required dependencies are still missing.
+    The window is `bootstrap_ui`, shared with the other applications in this family, so what
+    installing looks like is the same everywhere. It appears only when something is actually
+    missing, and it shows the output of the package manager as it arrives — a yes/no box followed
+    by four silent minutes tells nobody whether anything is happening.
+
+    Exits the process with status 1 when a required dependency is still missing afterwards.
     """
-    required_missing = missing_dependencies(required_only=True)
-    if not required_missing:
-        return
+    from bootstrap_ui import Need, ensure
 
-    package_list = ", ".join(_unique_packages(required_missing))
-    names = ", ".join(dep.name for dep in required_missing)
-    message = (
-        "Mint Cleaner is missing required components:\n\n"
-        f"{names}\n\n"
-        f"The following packages will be installed:\n{package_list}\n\n"
-        "Administrator privileges are required."
-    )
-
-    if not _ask_yes_no("Missing Dependencies", message):
-        sys.stderr.write(
-            "Mint Cleaner cannot start without required dependencies.\n"
-            f"Install manually: sudo apt-get install {package_list}\n"
+    # The table's own checks come along: tkinter is tested in a subprocess, because importing it
+    # here to find out would be the very thing that fails.
+    needs = [
+        Need(
+            label=dependency.description,
+            packages=tuple(dependency.packages),
+            optional=not dependency.required,
+            check=dependency.check,
         )
-        sys.exit(1)
+        for dependency in DEPENDENCIES
+    ]
 
-    success, output = install_dependencies(required_missing)
-    if output:
-        print(output, file=sys.stderr)
-
-    still_missing = missing_dependencies(required_only=True)
-    if not success or still_missing:
-        names = ", ".join(dep.name for dep in still_missing) or "unknown"
+    if not ensure("Mint Cleaner", needs, force="--setup" in sys.argv):
+        package_list = ", ".join(_unique_packages(missing_dependencies(required_only=True)))
         sys.stderr.write(
-            "Could not install all required dependencies.\n"
-            f"Still missing: {names}\n"
+            "Mint Cleaner cannot start without its required components.\n"
             f"Try manually: sudo apt-get install {package_list}\n"
         )
         sys.exit(1)
