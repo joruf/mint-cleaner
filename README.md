@@ -133,6 +133,7 @@ The user deletion mode is set directly in the window header, not in the menu.
 
 ```
 mint-cleaner/
+├── Mint-Cleaner.desktop            # Launcher next to run.py (relative Exec via %k)
 ├── run.py                          # Entry point; cleanup logic, GUI class and privileged helper
 ├── paths.py                        # Central path constants for resources, desktop file and markers
 ├── README.md                       # Project documentation
@@ -151,8 +152,9 @@ mint-cleaner/
 │   └── dependencies.py             # Checks runtime dependencies and offers apt install
 │
 ├── resources/                      # Shipped and generated resources
-│   ├── mint-cleaner.desktop        # Desktop entry template
-│   └── mint-cleaner-*.png          # Icons, generated on first start (not in version control)
+│   ├── mint-cleaner.desktop        # Nested launcher (%k walks up to the project root)
+│   ├── mint-cleaner.svg            # Application icon (theme name mint-cleaner)
+│   └── mint-cleaner-*.png          # Window icons, generated on first start
 │
 ├── tests/                          # Unit tests, run with unittest or pytest
 └── .github/workflows/              # CI and multi-OS matrix

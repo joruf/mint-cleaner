@@ -5,9 +5,9 @@
 Desktop shortcut creation.
 
 The shortcut on the user's desktop is switched on and off by the checkbox in the
-Integration menu, so there is exactly one place that controls it. A shortcut
-created by an older version is refreshed on every start so it keeps pointing at
-run.py and uses the generated application icon.
+Integration menu, so there is exactly one place that controls it. The project
+``.desktop`` file locates ``run.py`` via ``%k``. A symlink on the desktop keeps
+that true.
 """
 
 import stat
@@ -17,8 +17,9 @@ from paths import (
     DESKTOP_FILENAME,
     DESKTOP_TEMPLATE,
     MAIN_SCRIPT,
+    RESOURCES_DIR,
 )
-from ui.window_icon import WM_CLASS_PUBLISHED, desktop_icon_value
+from ui.window_icon import WM_CLASS_PUBLISHED
 
 MINT_CLEANER_SCRIPT = MAIN_SCRIPT
 
@@ -53,14 +54,31 @@ def user_desktop_dir() -> Path:
     return Path.home() / "Desktop"
 
 
+def _install_theme_icon() -> None:
+    """
+    Copy the SVG into the user hicolor theme as ``mint-cleaner``.
+
+    Icon names in ``.desktop`` files cannot be relative paths, so the file is
+    installed under the standard theme directory.
+    """
+    dest_dir = Path.home() / ".local" / "share" / "icons" / "hicolor" / "scalable" / "apps"
+    try:
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        src = RESOURCES_DIR / "mint-cleaner.svg"
+        if src.is_file():
+            (dest_dir / "mint-cleaner.svg").write_bytes(src.read_bytes())
+    except OSError:
+        pass
+
+
 DEFAULT_DESKTOP_TEMPLATE = (
     "[Desktop Entry]\n"
     "Version=1.0\n"
     "Type=Application\n"
     "Name=Mint Cleaner\n"
     "Comment=Selective temp and cache cleanup for Linux Mint\n"
-    "Icon=edit-clear-symbolic\n"
-    "Exec=python3 run.py\n"
+    "Icon=mint-cleaner\n"
+    'Exec=/bin/bash -c "cd \\\\$(dirname \\\\$(readlink -f \\\\$0)) && exec python3 ./run.py" %k\n'
     "Terminal=false\n"
     "Categories=Utility;System;\n"
     "StartupNotify=true\n"
@@ -70,15 +88,13 @@ DEFAULT_DESKTOP_TEMPLATE = (
 
 def build_desktop_entry_content() -> str:
     """
-    Build the .desktop file contents with absolute Exec and Icon paths.
+    Return the project desktop entry, with StartupWMClass kept in sync.
 
-    StartupWMClass matches the WM_CLASS of the application window, so the panel
-    shows a single taskbar entry with the correct icon.
+    Exec stays relative (``%k`` plus ``./run.py``). The icon name ``mint-cleaner``
+    is resolved from the user icon theme after the SVG is installed.
 
     @return str Desktop entry definition
     """
-    exec_line = f"Exec=python3 {MINT_CLEANER_SCRIPT}"
-    icon_line = f"Icon={desktop_icon_value()}"
     wm_class_line = f"StartupWMClass={WM_CLASS_PUBLISHED}"
 
     if DESKTOP_TEMPLATE.is_file():
@@ -89,11 +105,7 @@ def build_desktop_entry_content() -> str:
     lines: list[str] = []
     has_wm_class = False
     for line in template.splitlines():
-        if line.startswith("Exec="):
-            lines.append(exec_line)
-        elif line.startswith("Icon="):
-            lines.append(icon_line)
-        elif line.startswith("StartupWMClass="):
+        if line.startswith("StartupWMClass="):
             lines.append(wm_class_line)
             has_wm_class = True
         else:
@@ -113,12 +125,17 @@ def install_desktop_shortcut() -> tuple[bool, Path | None]:
     @return tuple[bool, Path | None] Success flag and created shortcut path
     """
     try:
+        if not DESKTOP_TEMPLATE.is_file():
+            return False, None
+        _install_theme_icon()
         desktop_dir = user_desktop_dir()
         desktop_dir.mkdir(parents=True, exist_ok=True)
         shortcut_path = desktop_dir / DESKTOP_FILENAME
-        shortcut_path.write_text(build_desktop_entry_content(), encoding="utf-8")
-        shortcut_path.chmod(
-            shortcut_path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH
+        if shortcut_path.is_symlink() or shortcut_path.exists():
+            shortcut_path.unlink()
+        shortcut_path.symlink_to(DESKTOP_TEMPLATE.resolve())
+        DESKTOP_TEMPLATE.chmod(
+            DESKTOP_TEMPLATE.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH
         )
         return True, shortcut_path
     except OSError:
@@ -127,23 +144,23 @@ def install_desktop_shortcut() -> tuple[bool, Path | None]:
 
 def refresh_desktop_shortcut() -> bool:
     """
-    Update an already created desktop shortcut when its content is outdated.
-
-    Keeps shortcuts created by earlier versions working after the start script
-    was renamed to run.py and gives them the generated application icon.
+    Replace a leftover copy with a symlink to the project desktop file.
 
     @return bool True when the shortcut was rewritten
     """
     try:
         shortcut_path = user_desktop_dir() / DESKTOP_FILENAME
-        if not shortcut_path.is_file():
+        if not shortcut_path.exists() and not shortcut_path.is_symlink():
             return False
-        expected = build_desktop_entry_content()
-        if shortcut_path.read_text(encoding="utf-8") == expected:
+        expected = DESKTOP_TEMPLATE.resolve()
+        if shortcut_path.is_symlink() and shortcut_path.resolve() == expected:
             return False
-        shortcut_path.write_text(expected, encoding="utf-8")
-        shortcut_path.chmod(
-            shortcut_path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH
+        _install_theme_icon()
+        if shortcut_path.is_symlink() or shortcut_path.exists():
+            shortcut_path.unlink()
+        shortcut_path.symlink_to(expected)
+        DESKTOP_TEMPLATE.chmod(
+            DESKTOP_TEMPLATE.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH
         )
         return True
     except OSError:
@@ -175,7 +192,7 @@ def remove_desktop_shortcut() -> bool:
     @return bool True when no shortcut is left behind
     """
     shortcut_path = desktop_shortcut_path()
-    if not shortcut_path.exists():
+    if not shortcut_path.exists() and not shortcut_path.is_symlink():
         return True
     try:
         shortcut_path.unlink()

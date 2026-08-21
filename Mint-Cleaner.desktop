@@ -3,8 +3,8 @@ Version=1.0
 Type=Application
 Name=Mint Cleaner
 Comment=Selective temp and cache cleanup for Linux Mint
-# %k is this .desktop file. run.py lives in the project root, one directory up.
-Exec=/bin/bash -c "cd \\$(dirname \\$(readlink -f \\$0))/.. && exec python3 ./run.py" %k
+# %k is this .desktop file, so ./run.py is always the one in the same folder.
+Exec=/bin/bash -c "cd \\$(dirname \\$(readlink -f \\$0)) && exec python3 ./run.py" %k
 Icon=mint-cleaner
 Terminal=false
 Categories=Utility;System;

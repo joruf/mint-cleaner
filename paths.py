@@ -7,9 +7,9 @@ RESOURCES_DIR = PROJECT_ROOT / "resources"
 
 MAIN_SCRIPT = PROJECT_ROOT / "run.py"
 
-# The .desktop template ships with the app. The icons that sit next to it are
-# rendered on first start by ui.window_icon, so they are not in version control.
-DESKTOP_TEMPLATE = RESOURCES_DIR / "mint-cleaner.desktop"
+# The .desktop launcher ships next to run.py. The PNG window icons in resources/
+# are still rendered on first start by ui.window_icon.
+DESKTOP_TEMPLATE = PROJECT_ROOT / "Mint-Cleaner.desktop"
 DESKTOP_FILENAME = "Mint Cleaner.desktop"
 
 ICON_BASENAME = "mint-cleaner"

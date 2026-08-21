@@ -13,20 +13,20 @@ class DesktopEntryTests(unittest.TestCase):
     def test_desktop_entry_points_to_run_py_with_icon_and_wm_class(self):
         content = desktop_setup.build_desktop_entry_content()
 
-        self.assertIn(f"Exec=python3 {desktop_setup.MINT_CLEANER_SCRIPT}", content)
-        self.assertTrue(str(desktop_setup.MINT_CLEANER_SCRIPT).endswith("/run.py"))
+        self.assertIn("./run.py", content)
+        self.assertIn("%k", content)
         self.assertNotIn("mint-cleaner.py", content)
         self.assertIn(f"StartupWMClass={window_icon.WM_CLASS_PUBLISHED}", content)
         icon_lines = [line for line in content.splitlines() if line.startswith("Icon=")]
-        self.assertEqual(len(icon_lines), 1)
-        self.assertNotEqual(icon_lines[0], "Icon=edit-clear-symbolic")
+        self.assertEqual(icon_lines, ["Icon=mint-cleaner"])
 
     def test_desktop_entry_uses_fallback_template_without_template_file(self):
         with mock.patch.object(desktop_setup, "DESKTOP_TEMPLATE", Path("/nonexistent.desktop")):
             content = desktop_setup.build_desktop_entry_content()
 
         self.assertTrue(content.startswith("[Desktop Entry]"))
-        self.assertIn(f"Exec=python3 {desktop_setup.MINT_CLEANER_SCRIPT}", content)
+        self.assertIn("./run.py", content)
+        self.assertIn("%k", content)
         self.assertIn(f"StartupWMClass={window_icon.WM_CLASS_PUBLISHED}", content)
 
     def test_refresh_desktop_shortcut_updates_legacy_entry(self):
@@ -46,6 +46,7 @@ class DesktopEntryTests(unittest.TestCase):
 
             self.assertTrue(changed)
             self.assertFalse(unchanged)
+            self.assertTrue(shortcut.is_symlink())
             content = shortcut.read_text(encoding="utf-8")
             self.assertNotIn("mint-cleaner.py", content)
             self.assertIn("run.py", content)
@@ -66,6 +67,7 @@ class DesktopEntryTests(unittest.TestCase):
 
             self.assertTrue(success)
             self.assertIsNotNone(path)
+            self.assertTrue(path.is_symlink())
             self.assertTrue(os.access(path, os.X_OK))
             self.assertIn("run.py", path.read_text(encoding="utf-8"))
 
