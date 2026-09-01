@@ -3,9 +3,12 @@ Version=1.0
 Type=Application
 Name=Mint Cleaner
 Comment=Selective temp and cache cleanup for Linux Mint
-# %k is this .desktop file, so ./run.py is always the one in the same folder.
-Exec=/bin/bash -c "cd \\$(dirname \\$(readlink -f \\$0)) && exec python3 ./run.py" %k
-Icon=mint-cleaner
+# %k is the path of this file, so the program beside it is the one that starts -- wherever the
+# folder was copied to. The same path repairs Icon= in place: a .desktop file cannot point at its
+# icon with a relative path (the spec reads one as a theme name), so the launcher writes the
+# absolute path of the icon next to it whenever the folder has moved.
+Exec=/bin/bash -c "s=\\$(readlink -f \\"\\$0\\"); d=\\${s%/*}; i=\\$d/resources/mint-cleaner.svg; grep -qxF \\"Icon=\\$i\\" \\"\\$s\\" || { I=\\$i awk '/^Icon=/{print \\"Icon=\\" ENVIRON[\\"I\\"]; next}1' \\"\\$s\\" > \\"\\$s.new\\" && mv -f \\"\\$s.new\\" \\"\\$s\\"; }; cd \\"\\$d\\" && exec python3 ./run.py" %k
+Icon=/home/joruf/Applications/mint-cleaner/resources/mint-cleaner.svg
 Terminal=false
 Categories=Utility;System;
 StartupNotify=true
