@@ -9,6 +9,10 @@ Uses a single `pkexec` authentication at startup – no repeated password prompt
 - **Startup progress** – the size analysis runs in the background behind a modal
   progress bar that lists every category with its status (done / running / pending),
   the measured size, a step counter and a percentage. The window never freezes.
+- **Live results while measuring** – free space appears with the first step, and
+  every measured category immediately raises the amount the current selection
+  would free. The table, the sizes at the checkboxes and the automatic selection
+  update while the analysis is still running, no need to wait for it to finish.
 - **Live size analysis** – shows the current MB/GB usage of all measurable categories.
 - **Auto‑select by threshold** – automatically ticks items larger than 100 MB (configurable).
 - **Auto‑deselect** – untick items that are 0 MB or have unknown size.

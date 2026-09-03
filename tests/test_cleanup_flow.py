@@ -297,6 +297,76 @@ class JobReporterTests(unittest.TestCase):
         self.assertEqual(reporter.index, 1)
 
 
+class LiveScanTests(unittest.TestCase):
+    """The analysis publishes results while it is still running."""
+
+    def test_reporter_live_copies_the_payload(self):
+        updates: queue.Queue = queue.Queue()
+        reporter = MINT_CLEANER.JobReporter(updates)
+        payload = {"sizes": {"tmp": 1}}
+
+        reporter.live(payload)
+        payload["sizes"] = {"tmp": 999}
+
+        kind, published, extra = updates.get_nowait()
+        self.assertEqual(kind, "live")
+        self.assertEqual(published, {"sizes": {"tmp": 1}})
+        self.assertIsNone(extra)
+
+    def test_scan_worker_publishes_disk_first_then_every_category(self):
+        sizes = {key: 7 * MIB for key in MINT_CLEANER.MEASURABLE_KEYS}
+
+        class FakeScanApp:
+            patterns = {key: ["/nonexistent"] for key in MINT_CLEANER.MEASURABLE_KEYS}
+            _scan_worker = MINT_CLEANER.MintCleanerApp._scan_worker
+
+            def _measure_key(self, key, patterns):
+                return sizes[key]
+
+        updates: queue.Queue = queue.Queue()
+        with mock.patch.dict(MINT_CLEANER.DISCOVERY_FINDERS, {}, clear=True):
+            result = FakeScanApp()._scan_worker(MINT_CLEANER.JobReporter(updates))
+
+        messages = []
+        while not updates.empty():
+            messages.append(updates.get_nowait())
+
+        live = [payload for kind, payload, _extra in messages if kind == "live"]
+        # Free space is known before the first category is measured.
+        self.assertIn("disk", live[0])
+        self.assertEqual(messages[0][0], "begin")
+        self.assertEqual(messages[0][2][0], "Read disk usage")
+        # One live update per measured category, so the total can count up.
+        reported = [payload["sizes"] for payload in live if "sizes" in payload]
+        self.assertEqual(len(reported), len(MINT_CLEANER.MEASURABLE_KEYS))
+        self.assertEqual(
+            [next(iter(entry)) for entry in reported],
+            list(MINT_CLEANER.MEASURABLE_KEYS),
+        )
+        self.assertEqual(result["sizes"], sizes)
+
+    def test_scan_worker_reports_each_size_before_finishing_its_step(self):
+        class FakeScanApp:
+            patterns = {}
+            _scan_worker = MINT_CLEANER.MintCleanerApp._scan_worker
+
+            def _measure_key(self, key, patterns):
+                return 5 * MIB
+
+        updates: queue.Queue = queue.Queue()
+        with mock.patch.dict(MINT_CLEANER.DISCOVERY_FINDERS, {}, clear=True):
+            FakeScanApp()._scan_worker(MINT_CLEANER.JobReporter(updates))
+
+        order = []
+        while not updates.empty():
+            kind, payload, _extra = updates.get_nowait()
+            if kind in ("live", "end") and not (kind == "live" and "disk" in payload):
+                order.append(kind)
+
+        # Every step publishes its value first and is only then marked done.
+        self.assertEqual(order[:4], ["end", "live", "end", "live"])
+
+
 class _FakeApp:
     """Minimal stand-in exposing the app methods the cleanup worker needs."""
 

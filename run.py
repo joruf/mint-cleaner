@@ -1537,6 +1537,17 @@ class JobReporter:
         """
         self._updates.put(("subtitle", text, None))
 
+    def live(self, payload: Dict[str, Any]) -> None:
+        """
+        Publish a partial result while the job is still running.
+
+        Lets the window show numbers as soon as they exist instead of waiting
+        for the whole job to finish.
+
+        :param payload: Partial result, for example {"sizes": {key: bytes}}.
+        """
+        self._updates.put(("live", dict(payload), None))
+
     def log(self, text: str) -> None:
         """
         Append a line to the activity log of the main window.
@@ -2558,6 +2569,8 @@ class MintCleanerApp(tk.Tk):
                 dialog.end_step(payload, result=result, failed=failed)
             elif kind == "subtitle":
                 dialog.set_subtitle(payload)
+            elif kind == "live":
+                self._apply_live_scan(payload)
             elif kind == "log":
                 log_append(self.log, payload)
 
@@ -2604,16 +2617,16 @@ class MintCleanerApp(tk.Tk):
         """
         self._show_projection()
 
-    def _apply_autoselect_by_threshold(self, sizes_now: Dict[str, int]) -> None:
+    def _measurable_key_vars(self) -> Dict[str, tk.BooleanVar]:
         """
-        Auto select checkboxes whose measurable size exceeds AUTOCHECK_THRESHOLD_MB.
-        Non measurable items are ignored.
-        """
-        if AUTOCHECK_THRESHOLD_MB <= 0:
-            return
-        threshold_bytes = int(AUTOCHECK_THRESHOLD_MB * 1024 * 1024)
+        Return the selection variables the automatic select rules apply to.
 
-        key_to_var = {
+        Single source for the threshold rule, the zero rule and the live update
+        during the analysis, so all three tick exactly the same boxes.
+
+        :return: Mapping of category key to its checkbox variable.
+        """
+        return {
             "tmp": self.var_tmp,
             "user_cache": self.var_user_cache,
             "thumbnails": self.var_thumbnails,
@@ -2634,37 +2647,56 @@ class MintCleanerApp(tk.Tk):
             "apt_cache": self.var_apt_cache,   # Now measurable via root
         }
 
+    def _autoselect_threshold_bytes(self) -> int:
+        """
+        Return the size from which a category is ticked automatically.
+
+        :return: Threshold in bytes, 0 when the automatic selection is off.
+        """
+        if AUTOCHECK_THRESHOLD_MB <= 0:
+            return 0
+        return int(AUTOCHECK_THRESHOLD_MB * 1024 * 1024)
+
+    def _apply_autoselect_by_threshold(self, sizes_now: Dict[str, int]) -> None:
+        """
+        Auto select checkboxes whose measurable size exceeds AUTOCHECK_THRESHOLD_MB.
+        Non measurable items are ignored.
+        """
+        threshold_bytes = self._autoselect_threshold_bytes()
+        if threshold_bytes <= 0:
+            return
+
+        key_to_var = self._measurable_key_vars()
         for key, size in sizes_now.items():
             var = key_to_var.get(key)
             if var is not None and size >= threshold_bytes:
                 var.set(True)
+
+    def _apply_live_category_size(self, key: str, size: int) -> None:
+        """
+        Apply the automatic select rules to a single freshly measured category.
+
+        Same rules as the full pass at the end of the analysis, only earlier, so
+        the boxes tick while the scan is still running.
+
+        :param key: Category key.
+        :param size: Measured size in bytes.
+        """
+        var = self._measurable_key_vars().get(key)
+        if var is None:
+            return
+        threshold_bytes = self._autoselect_threshold_bytes()
+        if size <= 0:
+            var.set(False)
+        elif threshold_bytes > 0 and size >= threshold_bytes:
+            var.set(True)
 
     def _apply_autodeselect_zero_or_unknown(self, sizes_now: Dict[str, int]) -> None:
         """
         Auto deselect all items that have size 0 or size unknown.
         Unknown size equals non measurable category or not present in sizes_now.
         """
-        key_to_var_measurable = {
-            "tmp": self.var_tmp,
-            "user_cache": self.var_user_cache,
-            "thumbnails": self.var_thumbnails,
-            "trash": self.var_trash,
-            "firefox": self.var_firefox,
-            "chrome": self.var_chrome,
-            "flatpak_syscache": self.var_flatpak_syscache,
-            "apt": self.var_apt,
-            "journal": self.var_journal,
-            "flatpak_app_cache": self.var_flatpak_app_cache,
-            "config_app_caches": self.var_config_app_caches,
-            "dev_tool_caches": self.var_dev_tool_caches,
-            "user_lang_tool_caches": self.var_user_lang_tool_caches,
-            "python_artifacts": self.var_python_artifacts,
-            "local_history": self.var_local_history,
-            "system_misc_caches": self.var_system_misc_caches,
-            "system_extra_caches": self.var_system_extra_caches,
-            "apt_cache": self.var_apt_cache,
-        }
-        for key, var in key_to_var_measurable.items():
+        for key, var in self._measurable_key_vars().items():
             size = sizes_now.get(key, None)
             if size is None or size == 0:
                 var.set(False)
@@ -2685,8 +2717,9 @@ class MintCleanerApp(tk.Tk):
         analysis and manual refreshes are visible instead of a frozen window.
         Root owned paths are measured by the privileged helper.
         """
-        steps = [CATEGORY_LABELS[key] for key in MEASURABLE_KEYS]
-        steps.append("Read disk usage")
+        # Disk usage comes first, it is instant and fills the table right away.
+        steps = ["Read disk usage"]
+        steps += [CATEGORY_LABELS[key] for key in MEASURABLE_KEYS]
         self._start_job(
             "Collecting data",
             "Mint Cleaner is measuring what can be cleaned. "
@@ -2708,6 +2741,11 @@ class MintCleanerApp(tk.Tk):
         sizes: Dict[str, int] = {}
         discovered: Dict[str, List[str]] = {}
 
+        reporter.begin("Read disk usage")
+        disk = disk_snapshot()
+        reporter.live({"disk": disk})
+        reporter.end(format_disk_line(disk))
+
         for key in MEASURABLE_KEYS:
             note = "(scanning your home directory)" if key in DISCOVERED_KEYS else ""
             reporter.begin(CATEGORY_LABELS[key], note)
@@ -2718,14 +2756,11 @@ class MintCleanerApp(tk.Tk):
                     patterns[key] = discovered[key]
                 size = self._measure_key(key, patterns)
                 sizes[key] = size
+                reporter.live({"sizes": {key: size}})
                 reporter.end(human_size(size))
             except Exception as exc:
                 sizes[key] = 0
                 reporter.end(f"failed: {exc}", failed=True)
-
-        reporter.begin("Read disk usage")
-        disk = disk_snapshot()
-        reporter.end(format_disk_line(disk))
 
         return {"sizes": sizes, "discovered": discovered, "disk": disk}
 
@@ -2755,6 +2790,29 @@ class MintCleanerApp(tk.Tk):
             f"{format_disk_line(self.disk_now)}",
         )
         self._log_projection()
+
+    def _apply_live_scan(self, payload: Dict[str, Any]) -> None:
+        """
+        Show partial analysis results while the scan is still running.
+
+        Free space appears with the first message, and every measured category
+        immediately raises the amount the current selection would free, so the
+        table is readable long before "Collecting data" is finished.
+
+        :param payload: Partial result published by the scan worker.
+        """
+        if "disk" in payload:
+            self.disk_now = payload["disk"]
+            self._update_disk_line()
+
+        sizes = payload.get("sizes") or {}
+        if sizes:
+            self.sizes_before.update(sizes)
+            for key, size in sizes.items():
+                self._apply_live_category_size(key, size)
+            self._update_category_labels(sizes)
+
+        self._show_projection(measuring=True)
 
     def _update_category_labels(self, sizes: Dict[str, int]) -> None:
         """
@@ -3075,7 +3133,7 @@ class MintCleanerApp(tk.Tk):
         for caption_var, caption in zip(self.result_caption_vars, captions):
             caption_var.set(caption)
 
-    def _show_projection(self) -> None:
+    def _show_projection(self, measuring: bool = False) -> None:
         """
         Show what the current selection would free in the disk space table.
 
@@ -3083,6 +3141,9 @@ class MintCleanerApp(tk.Tk):
         answers "how much space do I have, how much can I free, what is left
         afterwards" before anything is deleted. A finished cleanup replaces these
         numbers with the values that were really measured.
+
+        :param measuring: True while the analysis is still running, the note
+            then says that the amount is still growing.
         """
         if not hasattr(self, "result_vars") or not self.result_vars:
             return
@@ -3099,7 +3160,9 @@ class MintCleanerApp(tk.Tk):
         notes = [
             f"Projection for {selected_count} selected "
             f"{'category' if selected_count == 1 else 'categories'}",
-            "updates with every change of the selection",
+            "still measuring, the value keeps growing"
+            if measuring
+            else "updates with every change of the selection",
         ]
         if trash_mode_delays_space(selection, self.delete_mode_var.get()):
             notes.append(
