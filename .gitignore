@@ -8,3 +8,5 @@ services/__pycache__/
 .pytest_cache/
 # Application icons, generated on first start by ui/window_icon.py
 /resources/mint-cleaner-*.png
+# Version derived from the history by version.py, never checked in
+/VERSION

@@ -99,6 +99,7 @@ from ui.nemo_setup import (
 )
 from ui.progress_dialog import ProgressDialog
 from ui.window_icon import WM_CLASS_NAME, apply_window_icon, glyph_photo_image
+import version
 from datetime import datetime
 from urllib.parse import quote
 
@@ -2433,11 +2434,12 @@ class MintCleanerApp(tk.Tk):
 
     def on_about(self) -> None:
         """
-        Show the About dialog.
+        Show the About dialog with the version derived from the history.
         """
         messagebox.showinfo(
             "About Mint Cleaner",
-            "Mint Cleaner\n\n"
+            "Mint Cleaner\n"
+            f"Version {version.label()}\n\n"
             "Clean temporary files, caches and system leftovers on Linux Mint "
             "with a single authentication and a clear disk space report.",
             parent=self,

@@ -37,6 +37,10 @@ Uses a single `pkexec` authentication at startup – no repeated password prompt
   **Clean Selected** is the only colored button and carries the broom glyph, so the
   main action is unmistakable next to the secondary ones.
 - **No confirmation popups** – all progress is shown in the progress dialog and in the log.
+- **Version derived from the history** – nobody raises a number by hand. `version.py`
+  reads it from the commit history and Help → About shows it, for example
+  `0.1.8 (23) · 108f58c · 03.09.2026`: build 23, the first cleanup category,
+  eight changes since. See [Versioning](#versioning).
 
 ## Requirements
 
@@ -133,6 +137,35 @@ File                    Integration                  Help
 
 The user deletion mode is set directly in the window header, not in the menu.
 
+## Versioning
+
+The number is never typed, it is derived from the commit history by `version.py`:
+
+| part | meaning |
+|---|---|
+| major | raised by hand, only for a release that justifies it |
+| minor | commits in which a cleanup category arrived — something new to clean |
+| patch | commits since that last happened |
+| build | total number of commits |
+
+`Help → About` shows the full form together with the short hash and the date of
+the last commit, so a number in a bug report leads back to an exact commit.
+
+The derived value is cached in a `VERSION` file, which is **not** checked in — it
+is derived, and a checked-in copy would be stale one commit later. The commit
+hook rewrites it, so an installation copied without `.git` still knows its
+version. Activate the hook once per checkout:
+
+```bash
+git config core.hooksPath .githooks
+python3 version.py            # prints the current version
+python3 version.py --write    # what the hook does
+```
+
+Set `MINT_CLEANER_VERSION` to pin a value for a test or a one-off run. Without a
+history, without a `VERSION` file and without that variable the version reads
+`unknown` — an invented `0.0.0` would look real and send bug reports the wrong way.
+
 ## Project structure
 
 ```
@@ -140,6 +173,8 @@ mint-cleaner/
 ├── Mint-Cleaner.desktop            # Launcher next to run.py (relative Exec via %k)
 ├── run.py                          # Entry point; cleanup logic, GUI class and privileged helper
 ├── paths.py                        # Central path constants for resources, desktop file and markers
+├── version.py                      # Derives the version from the commit history; no number is typed
+├── .githooks/post-commit           # Refreshes the VERSION file after every commit
 ├── README.md                       # Project documentation
 ├── .gitignore                      # Git ignore rules for local and generated files
 ├── .gitattributes                  # Git line-ending and file attribute rules
