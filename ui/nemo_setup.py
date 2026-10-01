@@ -8,12 +8,13 @@ The action lives in ~/.local/share/nemo/actions/ and adds a Mint Cleaner entry
 to the Nemo context menu. It is switched on and off by the checkbox in the
 Integration menu, so there is exactly one place that controls it. An action that
 was installed by an older version is refreshed on every start so it keeps
-pointing at run.py.
+pointing at run.py. The single-file executable points the action at itself.
 """
 
+import shlex
 from pathlib import Path
 
-from paths import MAIN_SCRIPT
+from paths import IS_FROZEN, MAIN_SCRIPT, executable
 from ui.window_icon import desktop_icon_value
 
 NEMO_ACTIONS_DIR = Path.home() / ".local" / "share" / "nemo" / "actions"
@@ -27,12 +28,13 @@ def build_nemo_action_content() -> str:
 
     @return str Nemo action definition for context menu integration
     """
+    command = shlex.quote(str(executable())) if IS_FROZEN else f"python3 {MINT_CLEANER_SCRIPT}"
     return (
         "[Nemo Action]\n"
         "Active=true\n"
         "Name=Mint Cleaner\n"
         "Comment=Starts Mint Cleaner for selective temp and cache cleanup\n"
-        f"Exec=python3 {MINT_CLEANER_SCRIPT}\n"
+        f"Exec={command}\n"
         f"Icon={desktop_icon_value()}\n"
         "\n"
         "# Shown on right-click on folders or in an empty window\n"

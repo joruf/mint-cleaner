@@ -137,6 +137,53 @@ File                    Integration                  Help
 
 The user deletion mode is set directly in the window header, not in the menu.
 
+## Single-file executable (no Python needed)
+
+Mint Cleaner also comes as one file that carries Python, tkinter and Tcl/Tk.
+It is **Linux only** — pkexec, apt and the cleaned paths are Linux things, so
+there is no Windows or macOS build.
+
+```bash
+chmod +x mint-cleaner-linux-x86_64-<version>-build<build>
+./mint-cleaner-linux-x86_64-<version>-build<build>
+./mint-cleaner-linux-x86_64-<version>-build<build> --version
+```
+
+Every push to `main` publishes a GitHub release `v<version>-build<build>` with the
+file ([`release-exe.yml`](.github/workflows/release-exe.yml)). It is built on
+Ubuntu 22.04, the oldest supported Ubuntu, because it runs on every system with
+the same or a newer glibc and never on an older one (Mint 21+, Ubuntu 22.04+,
+Debian 12+). There is no updater: download a newer release by hand. Started from
+its new place, the program points an existing desktop shortcut and Nemo action
+at itself.
+
+To build it yourself, on the system the file is meant for:
+
+```bash
+./build-exe.py              # -> dist/mint-cleaner-linux-<arch>-<version>-build<build>
+./build-exe.py --clean      # rebuild the build environment from scratch
+./build-exe.py --keep-env   # reuse it without updating PyInstaller
+```
+
+The script needs `python3-venv` and `python3-tk` and the full git history: it
+writes the `VERSION` file from the history first, and the executable only ever
+reads that copy. It creates a build environment in `build/exe/`, runs PyInstaller
+and checks the result with `--version`.
+
+What differs from a checkout:
+
+- **Still provided by the system:** `pkexec` (`policykit-1`), `apt-get`, and the
+  optional `gio` (`glib2.0-bin`) and `flatpak`. The startup check still offers to
+  install them; `python3-tk` is never needed.
+- **Written outside the file:** the window icons go to
+  `~/.local/share/mint-cleaner/icons/`, the launcher icon to the user hicolor
+  theme. The program unpacks itself into a `/tmp/_MEI*` folder on every start
+  and never writes there; the `/tmp` cleanup skips these folders.
+- **Launchers** (desktop shortcut, Nemo action) start the file itself.
+- **Security:** the file runs as root through pkexec, so keep it where only you
+  (or root) can write, for example in your home directory — never in a shared or
+  world-writable folder. This is the same situation as `run.py` in a checkout.
+
 ## Versioning
 
 The number is never typed, it is derived from the commit history by `version.py`:
@@ -174,6 +221,7 @@ mint-cleaner/
 ├── run.py                          # Entry point; cleanup logic, GUI class and privileged helper
 ├── paths.py                        # Central path constants for resources, desktop file and markers
 ├── version.py                      # Derives the version from the commit history; no number is typed
+├── build-exe.py                    # Builds the single-file Linux executable with PyInstaller
 ├── .githooks/post-commit           # Refreshes the VERSION file after every commit
 ├── README.md                       # Project documentation
 ├── .gitignore                      # Git ignore rules for local and generated files
@@ -196,7 +244,7 @@ mint-cleaner/
 │   └── mint-cleaner-*.png          # Window icons, generated on first start
 │
 ├── tests/                          # Unit tests, run with unittest or pytest
-└── .github/workflows/              # CI and multi-OS matrix
+└── .github/workflows/              # CI, multi-OS matrix and the executable release
 ```
 
 ## Testing

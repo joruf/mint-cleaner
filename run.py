@@ -76,6 +76,20 @@ def sanitize_helper_environment() -> None:
 if "--helper" in sys.argv:
     sanitize_helper_environment()
 
+import paths
+
+# In the single-file executable every child (pkexec, apt-get, gio, the root
+# helper's shell commands) would otherwise inherit the bundled library paths.
+paths.use_system_environment_for_children()
+
+# Answered before tkinter is imported, so it works without a display.
+if __name__ == "__main__" and "--version" in sys.argv:
+    import version
+
+    sys.stdout.reconfigure(errors="replace")
+    print(f"Mint Cleaner {version.label()}")
+    sys.exit(0)
+
 if __name__ == "__main__" and "--helper" not in sys.argv:
     from services.dependencies import ensure_runtime_dependencies
 
@@ -248,6 +262,10 @@ PROTECTED_TMP_NAMES: frozenset = frozenset({
     ".font-unix",
     ".Test-unix",
 })
+
+# A running single-file executable (Mint Cleaner's own, and its root helper's)
+# lives in /tmp/_MEI*; deleting that folder breaks the running program.
+PYINSTALLER_TMP_PREFIX = "_MEI"
 
 # Conservative cache-only directories in ~/.config.
 # These paths contain temporary browser/Electron caches and can be recreated.
@@ -511,7 +529,7 @@ def is_protected_path(path: str) -> bool:
     for tmp_root in ("/tmp", "/var/tmp"):
         if expanded.startswith(tmp_root + os.sep):
             name = expanded[len(tmp_root) + 1:].split(os.sep, 1)[0]
-            if name in PROTECTED_TMP_NAMES or name.startswith("pulse-"):
+            if name in PROTECTED_TMP_NAMES or name.startswith(("pulse-", PYINSTALLER_TMP_PREFIX)):
                 return True
         elif expanded == tmp_root:
             # Never remove the tmp roots themselves.
@@ -1559,6 +1577,20 @@ class JobReporter:
 
 # ----------------------------- Single privileged helper via pkexec -----------------------------
 
+def root_helper_command() -> List[str]:
+    """
+    Return the command that starts the privileged helper through pkexec.
+
+    The single-file executable is started itself: its sys.executable is the
+    program, not an interpreter that could run a script.
+
+    :return: Argument vector, pkexec first.
+    """
+    if paths.IS_FROZEN:
+        return ["pkexec", str(paths.executable()), "--helper"]
+    return ["pkexec", sys.executable, "-u", os.path.abspath(__file__), "--helper"]
+
+
 class RootHelper:
     """
     Manage a single pkexec launched helper process that executes privileged actions.
@@ -1580,13 +1612,7 @@ class RootHelper:
         :param log: Optional Tk text widget to log status.
         :return: True if helper started and responded to ping, else False.
         """
-        helper_cmd = [
-            "pkexec",
-            sys.executable,
-            "-u",
-            os.path.abspath(__file__),
-            "--helper",
-        ]
+        helper_cmd = root_helper_command()
         try:
             self.proc = subprocess.Popen(
                 helper_cmd,

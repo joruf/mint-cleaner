@@ -10,3 +10,6 @@ services/__pycache__/
 /resources/mint-cleaner-*.png
 # Version derived from the history by version.py, never checked in
 /VERSION
+# Single-file executable: build environment and result of build-exe.py
+/build/
+/dist/

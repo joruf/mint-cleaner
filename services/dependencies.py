@@ -35,6 +35,11 @@ def _check_tkinter() -> bool:
 
     @return bool
     """
+    if getattr(sys, "frozen", False):
+        # The single-file executable carries tkinter, and its sys.executable is
+        # the program itself: "-c" would start Mint Cleaner, which would check
+        # again, without end. python3-tk is never needed there.
+        return True
     try:
         result = subprocess.run(
             [sys.executable, "-c", "import tkinter"],

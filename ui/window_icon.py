@@ -23,7 +23,7 @@ import zlib
 from pathlib import Path
 from typing import Callable, List, Optional, Sequence, Tuple
 
-from paths import ICON_BASENAME, RESOURCES_DIR
+from paths import ICON_BASENAME, IS_FROZEN, RESOURCES_DIR, user_data_dir
 
 # Rendered icons are written next to the .desktop template that references them.
 ICONS_DIR = RESOURCES_DIR
@@ -466,10 +466,14 @@ def icon_directories() -> List[Path]:
     Return the directories searched for cached icon files, preferred first.
 
     resources/ next to the program is used normally. The user cache directory is
-    the fallback for read-only installations.
+    the fallback for read-only installations. The single-file executable uses
+    its per-user data directory only: resources/ is its temporary unpack folder,
+    gone on exit, and launchers point at these files.
 
     @return list[Path] Candidate directories
     """
+    if IS_FROZEN:
+        return [user_data_dir() / "icons"]
     cache_home = os.environ.get("XDG_CACHE_HOME")
     cache_base = Path(cache_home) if cache_home else Path.home() / ".cache"
     return [ICONS_DIR, cache_base / "mint-cleaner"]

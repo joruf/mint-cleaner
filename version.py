@@ -53,11 +53,15 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
-ROOT = Path(__file__).resolve().parent
+# The single-file executable carries the VERSION file in the folder it unpacks
+# itself into; that folder has no history and is deleted on exit.
+FROZEN = bool(getattr(sys, "frozen", False))
+ROOT = Path(getattr(sys, "_MEIPASS", ".")) if FROZEN else Path(__file__).resolve().parent
 VERSION_FILE = ROOT / "VERSION"
 ENVIRONMENT_VARIABLE = "MINT_CLEANER_VERSION"
 
@@ -229,7 +233,7 @@ def _resolve(root: Path) -> Version:
         return fixed
 
     stored = from_file(root)
-    if not (root / ".git").exists():
+    if FROZEN or not (root / ".git").exists():
         # No history here, so the file is the only answer there can be.
         return stored or Version(UNKNOWN)
 

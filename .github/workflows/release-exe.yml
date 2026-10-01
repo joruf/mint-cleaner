@@ -1,0 +1,77 @@
+name: Executable
+
+# Builds the single-file Linux executable with build-exe.py and publishes it as
+# a GitHub release with the tag v<version>-build<build>.
+#
+# The version is derived from the commit history (version.py), so the build
+# number changes with every commit: every push to main gets its own release.
+# Run it by hand to rebuild the current one. Mint Cleaner is Linux only
+# (pkexec, apt), so there is no Windows build.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build on ubuntu-22.04
+    # The oldest supported Ubuntu: the file runs on every system with the same
+    # or a newer glibc, never on an older one.
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          # The whole history: the version is counted from it.
+          fetch-depth: 0
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3-venv python3-tk
+
+      # Writes the VERSION file from the history before PyInstaller runs.
+      - name: Build
+        run: /usr/bin/python3 build-exe.py
+
+      - name: Keep the executable
+        uses: actions/upload-artifact@v4
+        with:
+          name: exe-linux
+          path: dist/mint-cleaner-*
+          if-no-files-found: error
+
+  release:
+    name: Publish the release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Collect the executable
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Create or refresh the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION=$(python3 -c "import version; print(version.current().name)")
+          BUILD=$(python3 -c "import version; print(version.current().build)")
+          TAG="v${VERSION}-build${BUILD}"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/mint-cleaner-* --clobber
+          else
+            gh release create "$TAG" dist/mint-cleaner-* \
+              --target "$GITHUB_SHA" \
+              --title "Mint Cleaner ${VERSION} (${BUILD})" \
+              --notes "Single-file Linux executable built by build-exe.py on Ubuntu 22.04. Make the file executable (chmod +x) and start it; it asks for your password once through pkexec."
+          fi
