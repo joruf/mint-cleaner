@@ -26,6 +26,7 @@ No popups before or after deletion, progress is logged in the UI.
 import os
 import re
 import sys
+import time
 import shlex
 import glob
 import json
@@ -144,7 +145,7 @@ CATEGORY_LABELS: Dict[str, str] = {
     "local_history": "Editor Local History (.history)",
     "editor_caches": "Editor caches (VSIX, logs, snapshots)",
     "editor_state": "Editor workspace state and history",
-    "ai_assistant_logs": "AI assistant transcripts and logs",
+    "ai_assistant_logs": "AI assistant transcripts, logs and /tmp scratch",
     "go_mod_cache": "Go module cache (~/go/pkg/mod)",
     "node_modules": "Node.js node_modules folders",
     "composer_vendor": "Composer vendor folders",
@@ -274,11 +275,15 @@ CONFIG_CACHE_PATTERNS: List[str] = [
     "~/.config/Code/CachedData/*",
     "~/.config/Code/Code Cache/*",
     "~/.config/Code/GPUCache/*",
+    "~/.config/Code/DawnGraphiteCache/*",
+    "~/.config/Code/DawnWebGPUCache/*",
     "~/.config/Code/Service Worker/CacheStorage/*",
     "~/.config/Cursor/Cache/*",
     "~/.config/Cursor/CachedData/*",
     "~/.config/Cursor/Code Cache/*",
     "~/.config/Cursor/GPUCache/*",
+    "~/.config/Cursor/DawnGraphiteCache/*",
+    "~/.config/Cursor/DawnWebGPUCache/*",
     "~/.config/Cursor/Service Worker/CacheStorage/*",
     "~/.config/google-chrome/Default/Code Cache/*",
     "~/.config/google-chrome/Default/GPUCache/*",
@@ -377,9 +382,29 @@ AI_ASSISTANT_LOG_PATTERNS: List[str] = [
     "~/.claude/file-history/*",
     "~/.claude/shell-snapshots/*",
     "~/.claude/telemetry/*",
+    # Sub-agent transcripts and spilled tool output sit one level below the
+    # session folder, so the *.jsonl pattern above never reaches them.
+    "~/.claude/projects/*/*/subagents/*",
+    "~/.claude/projects/*/*/tool-results/*",
+    # Cursor agent history of each workspace; "mcps" and "canvases" hold
+    # configuration and are not matched.
+    "~/.cursor/projects/*/agent-transcripts/*",
+    "~/.cursor/projects/*/agent-tools/*",
+    "~/.cursor/projects/*/terminals/*",
     "~/.codeium/logs/*",
     "~/.config/github-copilot/logs/*",
 ]
+
+# Scratch space of AI coding assistants in /tmp (Claude Code: /tmp/claude-<uid>,
+# one folder per session below each project). Anything touched within the
+# last ASSISTANT_TMP_ACTIVE_SECONDS belongs to a running session and is kept.
+ASSISTANT_TMP_PREFIXES: tuple[str, ...] = ("claude-", "cursor-")
+ASSISTANT_TMP_ACTIVE_SECONDS = 24 * 3600
+AI_ASSISTANT_TMP_PATTERNS: List[str] = [
+    f"/tmp/claude-{os.getuid()}/*/*",
+    "/tmp/cursor-*",
+]
+AI_ASSISTANT_LOG_PATTERNS += AI_ASSISTANT_TMP_PATTERNS
 
 # Common Ubuntu/Linux system cache and transient data locations.
 # These paths are safe to recreate and do not include user configuration.
@@ -496,6 +521,52 @@ PYTHON_ARTIFACT_SKIP_DIR_NAMES = HOME_SCAN_SKIP_DIR_NAMES
 
 # ----------------------------- Utilities (unprivileged) -----------------------------
 
+def newest_mtime_under(path: str) -> float:
+    """
+    Return the newest modification time within a file or directory tree.
+
+    Stops walking as soon as an entry newer than the active window is seen,
+    so a live session is detected without scanning the whole tree.
+
+    :param path: File or directory.
+    :return: Newest mtime found, 0.0 when nothing is readable.
+    """
+    cutoff = time.time() - ASSISTANT_TMP_ACTIVE_SECONDS
+    newest = 0.0
+    for root, dirnames, files in os.walk(path, onerror=lambda e: None):
+        for name in [""] + files:
+            try:
+                mtime = os.lstat(os.path.join(root, name) if name else root).st_mtime
+            except OSError:
+                continue
+            newest = max(newest, mtime)
+            if newest >= cutoff:
+                return newest
+    return newest
+
+
+def is_active_assistant_tmp(expanded: str, relative: str) -> bool:
+    """
+    Return True when an assistant scratch path was used within the active window.
+
+    Folders at the top levels (name, project, session) are judged by their whole
+    tree; deeper entries by their own mtime, which keeps size scans fast.
+
+    :param expanded: Absolute path.
+    :param relative: Path below the tmp root, e.g. "claude-1000/proj/session".
+    :return: True when the path must be kept.
+    """
+    depth = len(relative.split(os.sep))
+    try:
+        if depth <= 3 and os.path.isdir(expanded) and not os.path.islink(expanded):
+            newest = newest_mtime_under(expanded)
+        else:
+            newest = os.lstat(expanded).st_mtime
+    except OSError:
+        return False
+    return newest >= time.time() - ASSISTANT_TMP_ACTIVE_SECONDS
+
+
 def is_protected_path(path: str) -> bool:
     """
     Return True when a path must never be deleted or moved to Trash.
@@ -530,6 +601,10 @@ def is_protected_path(path: str) -> bool:
         if expanded.startswith(tmp_root + os.sep):
             name = expanded[len(tmp_root) + 1:].split(os.sep, 1)[0]
             if name in PROTECTED_TMP_NAMES or name.startswith(("pulse-", PYINSTALLER_TMP_PREFIX)):
+                return True
+            if name.startswith(ASSISTANT_TMP_PREFIXES) and is_active_assistant_tmp(
+                expanded, expanded[len(tmp_root) + 1:]
+            ):
                 return True
         elif expanded == tmp_root:
             # Never remove the tmp roots themselves.
@@ -2175,7 +2250,7 @@ class MintCleanerApp(tk.Tk):
             (
                 "ai_assistant_logs",
                 self.var_ai_assistant_logs,
-                "AI assistant transcripts and logs — keeps memory folders",
+                "AI assistant transcripts, logs and /tmp scratch — keeps memory folders and active sessions",
             ),
             (
                 "go_mod_cache",

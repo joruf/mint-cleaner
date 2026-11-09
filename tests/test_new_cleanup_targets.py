@@ -7,7 +7,9 @@ project directories, and the corrected old kernel removal.
 import glob
 import importlib.util
 import os
+import shutil
 import tempfile
+import time
 import unittest
 from unittest import mock
 
@@ -88,6 +90,22 @@ class AiAssistantLogTests(unittest.TestCase):
         for pattern in MINT_CLEANER.AI_ASSISTANT_LOG_PATTERNS:
             self.assertIn(pattern, plan["user_py_delete"])
 
+    def test_patterns_cover_subagents_tool_results_and_cursor_history(self):
+        patterns = MINT_CLEANER.AI_ASSISTANT_LOG_PATTERNS
+        for expected in (
+            "~/.claude/projects/*/*/subagents/*",
+            "~/.claude/projects/*/*/tool-results/*",
+            "~/.cursor/projects/*/agent-transcripts/*",
+            "~/.cursor/projects/*/terminals/*",
+        ):
+            self.assertIn(expected, patterns)
+        self.assertNotIn("~/.cursor/projects/*/mcps/*", patterns)
+
+    def test_plan_includes_assistant_tmp_patterns(self):
+        plan, _discovered, _notes = _plan(ai_assistant_logs=True)
+        self.assertIn(f"/tmp/claude-{os.getuid()}/*/*", plan["user_py_delete"])
+        self.assertIn("/tmp/cursor-*", plan["user_py_delete"])
+
     def test_patterns_never_match_memory_directories(self):
         """Memory folders hold user-authored notes and must survive."""
         with tempfile.TemporaryDirectory() as home:
@@ -106,6 +124,55 @@ class AiAssistantLogTests(unittest.TestCase):
             self.assertEqual(matched, [transcript])
             self.assertTrue(os.path.exists(note))
             self.assertNotIn(memory, matched)
+
+
+class AssistantTmpProtectionTests(unittest.TestCase):
+    """Running sessions keep their scratch space; stale ones can go."""
+
+    def _make_session(self, name, age_seconds):
+        root = tempfile.mkdtemp(prefix="claude-", dir="/tmp")
+        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
+        session = os.path.join(root, "-home-demo", name)
+        os.makedirs(os.path.join(session, "scratchpad"))
+        note = os.path.join(session, "scratchpad", "note.txt")
+        with open(note, "w", encoding="utf-8") as handle:
+            handle.write("x")
+        stamp = time.time() - age_seconds
+        for path in (note, os.path.join(session, "scratchpad"), session):
+            os.utime(path, (stamp, stamp))
+        return root, session
+
+    def test_recent_session_is_protected(self):
+        _root, session = self._make_session("active", 60)
+        self.assertTrue(MINT_CLEANER.is_protected_path(session))
+
+    def test_stale_session_is_not_protected(self):
+        _root, session = self._make_session("stale", 3 * 24 * 3600)
+        self.assertFalse(MINT_CLEANER.is_protected_path(session))
+
+    def test_recent_file_deep_inside_keeps_whole_session(self):
+        _root, session = self._make_session("busy", 3 * 24 * 3600)
+        with open(os.path.join(session, "scratchpad", "fresh.txt"), "w", encoding="utf-8") as handle:
+            handle.write("y")
+        self.assertTrue(MINT_CLEANER.is_protected_path(session))
+
+    def test_generic_tmp_wipe_spares_active_claude_root(self):
+        root, _session = self._make_session("active", 60)
+        self.assertTrue(MINT_CLEANER.is_protected_path(root))
+
+    def test_rm_paths_removes_only_stale_sessions(self):
+        root, stale = self._make_session("stale", 3 * 24 * 3600)
+        active = os.path.join(root, "-home-demo", "active")
+        os.makedirs(active)
+        with open(os.path.join(active, "live.txt"), "w", encoding="utf-8") as handle:
+            handle.write("z")
+        MINT_CLEANER.rm_paths([os.path.join(root, "*", "*")])
+        self.assertFalse(os.path.exists(stale))
+        self.assertTrue(os.path.exists(active))
+
+    def test_size_scan_ignores_protected_session(self):
+        _root, session = self._make_session("active", 60)
+        self.assertEqual(MINT_CLEANER.size_of_path(session), 0)
 
 
 class ProjectDirectoryDiscoveryTests(unittest.TestCase):
